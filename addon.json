@@ -1,0 +1,16 @@
+{
+    "description": "Description",
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn*",
+        "*.git*"
+    ],
+    "tags": [
+        "roleplay",
+        "scenic"
+    ],
+    "title": "Enhanced PlayerModel Selector",
+    "type": "tool",
+    "workshopid": 504945881.0
+}
