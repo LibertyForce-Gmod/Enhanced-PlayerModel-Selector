@@ -12,7 +12,7 @@ local convars = { }
 convars["sv_playermodel_selector_enabled"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_gamemodes"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_instantly"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_REPLICATED ) }
+convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_delay"]		= { 100, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
 for cvar, v in pairs( convars ) do
@@ -65,14 +65,14 @@ local function UpdatePlayerModel( ply )
 			ply:SetBodygroup( k, tonumber( groups[ k + 1 ] ) or 0 )
 		end
 		
-		--[[if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
+		if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_unlockflexes", 0 ) ) then
 			local flexes = ply:GetInfo( "cl_playerflexes" )
 			if ( flexes == nil ) then flexes = "" end
 			local flexes = string.Explode( " ", flexes )
 			for k = 0, ply:GetFlexNum() - 1 do
 				ply:SetFlexWeight( k, tonumber( flexes[ k + 1 ] ) or 0 )
 			end
-		end]]
+		end
 		
 		local pcol = ply:GetInfo( "cl_playercolor" )
 		local wcol = ply:GetInfo( "cl_weaponcolor" )
@@ -119,7 +119,7 @@ net.Receive("lf_playermodel_update", function(len,ply)
 end)
 
 hook.Add( "PlayerSpawn", "lf_playermodel_force_hook", function( ply )
-	if GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_force", 0 ) ) then
+	if GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
 		local delay = GetConVar( "sv_playermodel_selector_delay" ):GetInt()
 		if delay > 2000 then delay = 2000
 		elseif delay < 10 then delay = 10
@@ -142,6 +142,7 @@ local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk" }
 local Favorites = { }
+local flexes_unlocked = false
 
 if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
 	Favorites = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
@@ -149,7 +150,9 @@ if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
 end
 
 
-CreateClientConVar( "cl_playermodel_force", "1", true, true )
+CreateClientConVar( "cl_playermodel_selector_force", "1", true, true )
+CreateClientConVar( "cl_playermodel_selector_unlockflexes", "0", false, true )
+CreateClientConVar( "cl_playermodel_selector_bgcolor_custom", "1", true, true )
 
 net.Receive("lf_playermodel_cvar_sync", function()
 	local tbl = net.ReadTable()
@@ -198,9 +201,24 @@ function Menu.Setup()
 	Frame:Center()
 	Frame:MakePopup()
 	Frame:SetKeyboardInputEnabled( false )
+	local r, g, b = 97, 100, 102
+	if GetConVar( "cl_playermodel_selector_bgcolor_custom" ):GetBool() then
+		local bgcolor = string.Explode( " ", GetConVar( "cl_playercolor" ):GetString() )
+		r, g, b = math.Round( bgcolor[1] * 255 ), math.Round( bgcolor[2] * 255 ), math.Round( bgcolor[3] * 255 )
+	end
+	Frame.Paint = function( self, w, h )
+		draw.RoundedBox( 10, 0, 0, w, h, Color( r, g, b, 127 ) ) return true
+	end
 	
-	Frame.btnMinim:SetEnabled( true )
-	Frame.btnMinim.DoClick = function()
+	Frame.lblTitle:SetTextColor( Color( 0, 0, 0, 255 ) )
+	Frame.lblTitle.Paint = function ( self, w, h )
+		draw.SimpleTextOutlined( Frame.lblTitle:GetText(), "DermaDefaultBold", 1, 2, Color( 255, 255, 255, 255), 0, 0, 1, Color( 0, 0, 0, 255) ) return true
+	end
+	
+	Frame.btnMinim:SetVisible( false )
+	Frame.btnMaxim.Paint = function( panel, w, h ) derma.SkinHook( "Paint", "WindowMinimizeButton", panel, w, h ) end
+	Frame.btnMaxim:SetEnabled( true )
+	Frame.btnMaxim.DoClick = function()
 		Frame:SetVisible( false )
 	end
 
@@ -234,12 +252,15 @@ function Menu.Setup()
 	end
 	
 	local c = topmenu:Add( "DCheckBoxLabel" )
-	c.cvar = "cl_playermodel_force"
+	c.cvar = "cl_playermodel_selector_force"
 	c:SetPos( 250, 8 )
 	c:SetValue( GetConVar(c.cvar):GetBool() )
 	c:SetText( "Force playermodel on spawn" )
-	c:SetTooltip( "If enabled, the selected playermodel will be applied upon spawn in every gamemode." )
+	c:SetTooltip( "If enabled, the selected playermodel will be\napplied upon spawn in every gamemode." )
 	c:SizeToContents()
+	c.Label.Paint = function ( self, w, h )
+		draw.SimpleTextOutlined( c.Label:GetText(), "DermaDefault", 0, 0, Color( 255, 255, 255, 255), 0, 0, 1, Color( 0, 0, 0, 255) ) return true
+	end
 	c.OnChange = function( p, v )
 		RunConsoleCommand( c.cvar, v == true and "1" or "0" )
 	end
@@ -304,7 +325,6 @@ function Menu.Setup()
 			Favorites[name].model = LocalPlayer():GetInfo( "cl_playermodel" )
 			Favorites[name].skin = LocalPlayer():GetInfoNum( "cl_playerskin", 0 )
 			Favorites[name].bodygroups = LocalPlayer():GetInfo( "cl_playerbodygroups" )
-			--Favorites[name].flexes = LocalPlayer():GetInfo( "cl_playerflexes" )
 			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites ) )
 			Menu.FavPopulate()
 		end
@@ -362,7 +382,6 @@ function Menu.Setup()
 					PanelSelect:FindBestActive()
 					RunConsoleCommand( "cl_playerbodygroups", Favorites[name].bodygroups )
 					RunConsoleCommand( "cl_playerskin", Favorites[name].skin )
-					--RunConsoleCommand( "cl_playerflexes", Favorites[name].flexes )
 				end )
 			end
 		end
@@ -380,13 +399,6 @@ function Menu.Setup()
 		local flexcontrols = Frame:Add( "DPanel" )
 		local flextab = sheet:AddSheet( "Flexes", flexcontrols, "icon16/emoticon_wink.png" )
 		flexcontrols:DockPadding( 8, 8, 8, 8 )
-
-		local t = flexcontrols:Add( "DLabel", panel )
-		t:Dock( TOP )
-		t:SetSize( 0, 30 )
-		t:SetText( "Note: The model preview for flexes doesn't work correctly.\nHowever, they will be visible on your playermodel when you apply them." )
-		t:SetDark( true )
-		t:SetWrap( true )
 		
 		local flexcontrolspanel = flexcontrols:Add( "DPanelList" )
 		flexcontrolspanel:EnableVerticalScrollbar( true )
@@ -423,14 +435,26 @@ function Menu.Setup()
 		
 		local b = controls:Add( "DButton" )
 		b:DockMargin( 0, 8, 0, 0 )
-		b:Dock( TOP )
-		b:SetSize( 50, 20 )
+		b:Dock( LEFT )
+		b:SetSize( 200, 20 )
 		b:SetText( "Reset to default values" )
 		b.DoClick = function()
 			plycol:SetVector( Vector( 0.24, 0.34, 0.41 ) )
 			wepcol:SetVector( Vector( 0.30, 1.80, 2.10 ) )
 			RunConsoleCommand( "cl_playercolor", "0.24 0.34 0.41" )
 			RunConsoleCommand( "cl_weaponcolor", "0.30 1.80 2.10" )
+		end
+		
+		local c = controls:Add( "DCheckBoxLabel" )
+		c.cvar = "cl_playermodel_selector_bgcolor_custom"
+		c:DockMargin( 0, 9, 0, 0 )
+		c:Dock( RIGHT )
+		c:SetValue( GetConVar(c.cvar):GetBool() )
+		c:SetText( "Use Player color as background" )
+		c:SetDark( true )
+		c:SizeToContents()
+		c.OnChange = function( p, v )
+			RunConsoleCommand( c.cvar, v == true and "1" or "0" )
 		end
 		
 		
@@ -452,7 +476,7 @@ function Menu.Setup()
 			c:SetPos( 10, 20 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Enable menu for all players" )
-			c:SetTooltip( "If enabled, the Playermodel Selector can be used by all players. If disabled, only admins can use it." )
+			c:SetTooltip( "If enabled, the Playermodel Selector can be used\nby all players. If disabled, only admins can use it." )
 			c:SetDark( true )
 			c:SizeToContents()
 			c.OnChange = ChangeCVar
@@ -462,7 +486,7 @@ function Menu.Setup()
 			c:SetPos( 10, 50 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Allow instant changes" )
-			c:SetTooltip( "If enabled, players can apply their changes instantly instead of having to respawn." )
+			c:SetTooltip( "If enabled, players can apply their changes\ninstantly instead of having to respawn." )
 			c:SetDark( true )
 			c:SizeToContents()
 			c.OnChange = ChangeCVar
@@ -472,7 +496,7 @@ function Menu.Setup()
 			c:SetPos( 10, 80 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Allow playermodel enforcement" )
-			c:SetTooltip( "If enabled, the selected playermodel will be applied upon spawn in every gamemode." )
+			c:SetTooltip( "If enabled, the selected playermodel will be\napplied upon spawn in every gamemode." )
 			c:SetDark( true )
 			c:SizeToContents()
 			c.OnChange = ChangeCVar
@@ -488,7 +512,7 @@ function Menu.Setup()
 				c:SetSize( 40, 20 )
 				c:SetNumeric( true )
 				c:SetValue( GetConVar("sv_playermodel_selector_delay"):GetString() )
-				c:SetTooltip( "Delay until your playermodel is enforced. Increase, if it's still overwritten. Decrease, for smoother spawning. Recommended to keep on default, unless you encounter problems." )
+				c:SetTooltip( "Delay until your playermodel is enforced.\nIncrease, if it's still overwritten. Decrease, for smoother spawning.\nRecommended to keep on default, unless you encounter problems." )
 				c.OnLoseFocus = function()
 					Frame:SetKeyboardInputEnabled( false )
 					net.Start("lf_playermodel_cvar_change")
@@ -508,11 +532,10 @@ function Menu.Setup()
 			c:SetPos( 10, 170 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Experimental: Allow players to change flexes" )
-			c:SetTooltip( "If enabled, players can change the flexes for their playermodels.\nThis might breaks a lot of things, including player blinking. Use at own risk.\nChanges to playermodel flexes can only be reset by disconnecting! Always disabled by default." )
+			c:SetTooltip( "If enabled, players can change the flexes for their playermodels.\nThis might break a lot of things, including player blinking. Use at own risk.\nChanges to playermodel flexes can only be reset by disconnecting!" )
 			c:SetDark( true )
 			c:SizeToContents()
 			c.OnChange = ChangeCVar
-			c:SetDisabled(true)
 			
 		end
 
@@ -626,34 +649,86 @@ function Menu.Setup()
 			bgtab.Tab:SetVisible( true )
 		end
 		
-		--[[if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
-			local flexes = string.Explode( " ", GetConVar( "cl_playerflexes" ):GetString() )
-			for k = 0, mdl.Entity:GetFlexNum() - 1 do
-				if ( mdl.Entity:GetFlexNum( k ) <= 1 ) then continue end
-
-				local flex = vgui.Create( "DNumSlider" )
-				local vmin, vmax = mdl.Entity:GetFlexBounds( k )
-				local default = 0
-				if vmin == -1 and vmax == 1 then default = 0.5 end
-				flex:Dock( TOP )
-				flex:SetText( Menu.MakeNiceName( mdl.Entity:GetFlexName( k ) ) )
-				flex:SetDark( true )
-				flex:SetTall( 50 )
-				flex:SetDecimals( 2 )
-				flex.type = "flex"
-				flex.typenum = k
-				flex:SetMin( vmin )
-				flex:SetMax( vmax )
-				flex:SetValue( flexes[ k + 1 ] or default )
-				flex.OnValueChanged = Menu.UpdateBodyGroups
+		if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
+			if flexes_unlocked or GetConVar( "cl_playermodel_selector_unlockflexes" ):GetBool() then
+				flexes_unlocked = true
 				
-				flexcontrolspanel:AddItem( flex )
+				local t = vgui.Create( "DLabel" )
+				t:Dock( TOP )
+				t:SetTall( 70 )
+				t:SetText( "Notes:\n-The model preview for flexes doesn't work correctly. However, they will be visible on your playermodel when you apply them.\n- The default values provided might not be correct and cause distorted faces.\n- There is no way to reset (or fix) flex manipulation besides disconnecting." )
+				t:SetDark( true )
+				t:SetWrap( true )
+				flexcontrolspanel:AddItem( t )
+				
+				local flexes = string.Explode( " ", GetConVar( "cl_playerflexes" ):GetString() )
+				for k = 0, mdl.Entity:GetFlexNum() - 1 do
+					if ( mdl.Entity:GetFlexNum( k ) <= 1 ) then continue end
 
-				mdl.Entity:SetFlexWeight( k, flexes[ k + 1 ] or default )
+					local flex = vgui.Create( "DNumSlider" )
+					local vmin, vmax = mdl.Entity:GetFlexBounds( k )
+					local default = 0
+					if vmin == -1 and vmax == 1 then default = 0.5 end
+					flex:Dock( TOP )
+					flex:SetText( Menu.MakeNiceName( mdl.Entity:GetFlexName( k ) ) )
+					flex:SetDark( true )
+					flex:SetTall( 30 )
+					flex:SetDecimals( 2 )
+					flex.type = "flex"
+					flex.typenum = k
+					flex:SetMin( vmin )
+					flex:SetMax( vmax )
+					flex:SetValue( flexes[ k + 1 ] or default )
+					flex.OnValueChanged = Menu.UpdateBodyGroups
+					
+					flexcontrolspanel:AddItem( flex )
+
+					mdl.Entity:SetFlexWeight( k, flexes[ k + 1 ] or default )
+					
+					flextab.Tab:SetVisible( true )
+				end
+			else
+				local t = vgui.Create( "DLabel" )
+				t:Dock( TOP )
+				t:SetTall( 40 )
+				t:SetText( "Read before using!" )
+				t:SetFont( "DermaLarge" )
+				t:SetTextColor( Color( 255, 0, 0, 255 ) )
+				t:SetWrap( true )
+				flexcontrolspanel:AddItem( t )
+				
+				local t = vgui.Create( "DLabel" )
+				t:Dock( TOP )
+				t:SetTall( 120 )
+				t:SetText( "Here you can manipulate flexes on your playermodel. However, flex manipulation is not really made for playermodels and will cause issues. This includes the following:\n- Eye blinking no longer working.\n- Faces might be distorted unless the flexes are corrected manually.\n- Might break the faces of incompatible playermodels completely.\n- Even if you put all flexes to default value, the engine still considers them as manipulated. Models with problems won't be fixed." )
+				t:SetDark( true )
+				t:SetWrap( true )
+				flexcontrolspanel:AddItem( t )
+				
+				local t = vgui.Create( "DLabel" )
+				t:Dock( TOP )
+				t:SetTall( 40 )
+				t:SetText( "Unlocking flex manipulation can only be undone by DISCONNECTING, a simple respawn or model change won't fix these issues." )
+				t:SetTextColor( Color( 255, 0, 0, 255 ) )
+				t:SetWrap( true )
+				flexcontrolspanel:AddItem( t )
+				
+				local b = vgui.Create( "DButton", panel )
+				--b:SetPos( 270, 0 )
+				b:Dock( TOP )
+				b:DockPadding( 100, 100, 20, 20 )
+				b:SetTall( 30 )
+				b:SetText( "Unlock flex manipulation (can not be undone)" )
+				b.DoClick = function()
+					RunConsoleCommand( "cl_playermodel_selector_unlockflexes", "1" )
+					flexes_unlocked = true
+					Menu.RebuildBodygroupTab()
+				end
+				flexcontrolspanel:AddItem( b )
 				
 				flextab.Tab:SetVisible( true )
 			end
-		end]]
+		end
 	end
 	
 	function Menu.UpdateFromConvars()
@@ -779,12 +854,13 @@ list.Set( "PlayerOptionsAnimations", "css_riot", { "pose_standing_02", "idle_fis
 list.Set( "PlayerOptionsAnimations", "css_swat", { "pose_standing_02", "idle_fist" } )
 list.Set( "PlayerOptionsAnimations", "css_urban", { "pose_standing_02", "idle_fist" } )
 
-list.Set( "PlayerOptionsAnimations", "May", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
-list.Set( "PlayerOptionsAnimations", "Dawn", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
-list.Set( "PlayerOptionsAnimations", "Rosa", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
-list.Set( "PlayerOptionsAnimations", "Hilda", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
-list.Set( "PlayerOptionsAnimations", "Mami", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
-list.Set( "PlayerOptionsAnimations", "Tda Hatsune Miku (v2)", { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all" } )
+local bonus = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "swim_idle_all", "idle_all_scared", "idle_magic" }
+list.Set( "PlayerOptionsAnimations", "May", bonus )
+list.Set( "PlayerOptionsAnimations", "Dawn", bonus )
+list.Set( "PlayerOptionsAnimations", "Rosa", bonus )
+list.Set( "PlayerOptionsAnimations", "Hilda", bonus )
+list.Set( "PlayerOptionsAnimations", "Mami", bonus )
+list.Set( "PlayerOptionsAnimations", "Tda Hatsune Miku (v2)", bonus )
 
 
 end
