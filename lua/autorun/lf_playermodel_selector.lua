@@ -35,13 +35,21 @@ net.Receive("lf_playermodel_cvar_change", function(len,ply)
 end)
 
 
+local legs_installed = false
+if file.Exists( "autorun/sh_legs.lua", "LUA" ) then legs_installed = true end
+
+
 local function UpdatePlayerModel( ply )
 	if ply:IsAdmin() or
-	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes") ) )
+	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) )
 	then
 	
+		--hook.Call( "PlayerSetModel", GM, ply )
+		--include( "autorun/sh_legs.lua" )
+		
 		local mdlname = ply:GetInfo( "cl_playermodel" )
 		local mdlpath = player_manager.TranslatePlayerModel( mdlname )
+		
 		ply:SetModel( mdlpath )
 		
 		local skin = ply:GetInfoNum( "cl_playerskin", 0 )
@@ -59,9 +67,14 @@ local function UpdatePlayerModel( ply )
 		ply:SetWeaponColor( Vector( wcol ) )
 		
 		ply:SetupHands( )
-
-		net.Start("lf_playermodel_update")
-		net.Send( ply )
+		
+		if legs_installed then
+			ply:SetNWString( "realModel", mdlpath )
+			timer.Simple( 0.1, function()
+				net.Start("lf_playermodel_update")
+				net.Send( ply )
+			end )
+		end
 		
 	end
 end
@@ -95,8 +108,6 @@ if CLIENT then
 
 local Frame
 local default_animations = { "idle_all_01", "menu_walk" }
-local legs_installed = false
-if file.Exists( "autorun/sh_legs.lua", "LUA" ) then legs_installed = true end
 
 CreateClientConVar( "cl_playermodel_force", "1", true, true )
 
@@ -116,9 +127,7 @@ end )
 
 
 net.Receive("lf_playermodel_update", function()
-	if legs_installed then
 		include( "autorun/sh_legs.lua" )
-	end
 end)
 
 local function KeyboardOn( pnl )
@@ -187,7 +196,7 @@ local function Menu()
 	c.cvar = "cl_playermodel_force"
 	c:SetPos( 250, 8 )
 	c:SetValue( GetConVar(c.cvar):GetBool() )
-	c:SetText( "Force playermodel on spawn." )
+	c:SetText( "Force playermodel on spawn" )
 	c:SetTooltip( "If enabled, the selected playermodel will be applied upon spawn in every gamemode." )
 	c:SizeToContents()
 	c.OnChange = function( p, v )
@@ -229,20 +238,32 @@ local function Menu()
 		plycol:SetAlphaBar( false )
 		plycol:SetPalette( false )
 		plycol:Dock( TOP )
-		plycol:SetSize( 200, 260 )
+		plycol:SetSize( 200, 250 )
 
 		local lbl = controls:Add( "DLabel" )
 		lbl:SetText( "Physgun color" )
 		lbl:SetTextColor( Color( 0, 0, 0, 255 ) )
-		lbl:DockMargin( 0, 32, 0, 0 )
+		lbl:DockMargin( 0, 8, 0, 0 )
 		lbl:Dock( TOP )
 
 		local wepcol = controls:Add( "DColorMixer" )
 		wepcol:SetAlphaBar( false )
 		wepcol:SetPalette( false )
 		wepcol:Dock( TOP )
-		wepcol:SetSize( 200, 260 )
-		wepcol:SetVector( Vector( GetConVarString( "cl_weaponcolor" ) ) );
+		wepcol:SetSize( 200, 250 )
+		wepcol:SetVector( Vector( GetConVar( "cl_weaponcolor" ):GetString() ) )
+		
+		local b = controls:Add( "DButton" )
+		b:DockMargin( 0, 8, 0, 0 )
+		b:Dock( TOP )
+		b:SetSize( 50, 20 )
+		b:SetText( "Reset to default values" )
+		b.DoClick = function()
+			plycol:SetVector( Vector( 0.24, 0.34, 0.41 ) )
+			wepcol:SetVector( Vector( 0.30, 1.80, 2.10 ) )
+			RunConsoleCommand( "cl_playercolor", "0.24 0.34 0.41" )
+			RunConsoleCommand( "cl_weaponcolor", "0.30 1.80 2.10" )
+		end
 
 		sheet:AddSheet( "Colors", controls, "icon16/color_wheel.png" )
 		
@@ -266,7 +287,7 @@ local function Menu()
 		c.cvar = "sv_playermodel_selector_enabled"
 		c:SetPos( 10, 20 )
 		c:SetValue( GetConVar(c.cvar):GetBool() )
-		c:SetText( "Enable menu for all players." )
+		c:SetText( "Enable menu for all players" )
 		c:SetTooltip( "If enabled, the Playermodel Selector can be used by all players. If disabled, only admins can use it." )
 		c:SetDark( true )
 		c:SizeToContents()
@@ -281,7 +302,7 @@ local function Menu()
 		c.cvar = "sv_playermodel_selector_instantly"
 		c:SetPos( 10, 50 )
 		c:SetValue( GetConVar(c.cvar):GetBool() )
-		c:SetText( "Allow instant changes." )
+		c:SetText( "Allow instant changes" )
 		c:SetTooltip( "If enabled, players can apply their changes instantly instead of having to respawn." )
 		c:SetDark( true )
 		c:SizeToContents()
@@ -375,7 +396,7 @@ local function Menu()
 
 			mdl.Entity:SetBodygroup( pnl.typenum, math.Round( val ) )
 
-			local str = string.Explode( " ", GetConVarString( "cl_playerbodygroups" ) )
+			local str = string.Explode( " ", GetConVar( "cl_playerbodygroups" ):GetString() )
 			if ( #str < pnl.typenum + 1 ) then for i = 1, pnl.typenum + 1 do str[ i ] = str[ i ] or 0 end end
 			str[ pnl.typenum + 1 ] = math.Round( val )
 			RunConsoleCommand( "cl_playerbodygroups", table.concat( str, " " ) )
@@ -402,18 +423,18 @@ local function Menu()
 			skins:SetTall( 50 )
 			skins:SetDecimals( 0 )
 			skins:SetMax( nskins )
-			skins:SetValue( GetConVarNumber( "cl_playerskin" ) )
+			skins:SetValue( GetConVar( "cl_playerskin" ):GetInt() )
 			skins.type = "skin"
 			skins.OnValueChanged = UpdateBodyGroups
 			
 			bdcontrolspanel:AddItem( skins )
 
-			mdl.Entity:SetSkin( GetConVarNumber( "cl_playerskin" ) )
+			mdl.Entity:SetSkin( GetConVar( "cl_playerskin" ):GetInt() )
 			
 			bgtab.Tab:SetVisible( true )
 		end
 
-		local groups = string.Explode( " ", GetConVarString( "cl_playerbodygroups" ) )
+		local groups = string.Explode( " ", GetConVar( "cl_playerbodygroups" ):GetString() )
 		for k = 0, mdl.Entity:GetNumBodyGroups() - 1 do
 			if ( mdl.Entity:GetBodygroupCount( k ) <= 1 ) then continue end
 
@@ -443,11 +464,11 @@ local function Menu()
 		local modelname = player_manager.TranslatePlayerModel( model )
 		util.PrecacheModel( modelname )
 		mdl:SetModel( modelname )
-		mdl.Entity.GetPlayerColor = function() return Vector( GetConVarString( "cl_playercolor" ) ) end
+		mdl.Entity.GetPlayerColor = function() return Vector( GetConVar( "cl_playercolor" ):GetString() ) end
 		mdl.Entity:SetPos( Vector( -100, 0, -61 ) )
 
-		plycol:SetVector( Vector( GetConVarString( "cl_playercolor" ) ) )
-		wepcol:SetVector( Vector( GetConVarString( "cl_weaponcolor" ) ) )
+		plycol:SetVector( Vector( GetConVar( "cl_playercolor" ):GetString() ) )
+		wepcol:SetVector( Vector( GetConVar( "cl_weaponcolor" ):GetString() ) )
 
 		PlayPreviewAnimation( mdl, model )
 		RebuildBodygroupTab()
@@ -503,7 +524,7 @@ end
 
 local function MenuToggle()
 	if LocalPlayer():IsAdmin() or
-	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes") ) )
+	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) )
 	then
 		if IsValid( Frame ) then
 			Frame:ToggleVisible()
