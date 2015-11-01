@@ -12,7 +12,7 @@ local convars = { }
 convars["sv_playermodel_selector_enabled"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_gamemodes"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_instantly"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_flexes"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_delay"]		= { 100, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
 for cvar, v in pairs( convars ) do
@@ -65,21 +65,40 @@ local function UpdatePlayerModel( ply )
 			ply:SetBodygroup( k, tonumber( groups[ k + 1 ] ) or 0 )
 		end
 		
-		if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
+		--[[if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
 			local flexes = ply:GetInfo( "cl_playerflexes" )
 			if ( flexes == nil ) then flexes = "" end
 			local flexes = string.Explode( " ", flexes )
 			for k = 0, ply:GetFlexNum() - 1 do
 				ply:SetFlexWeight( k, tonumber( flexes[ k + 1 ] ) or 0 )
 			end
-		end
+		end]]
 		
 		local pcol = ply:GetInfo( "cl_playercolor" )
 		local wcol = ply:GetInfo( "cl_weaponcolor" )
 		ply:SetPlayerColor( Vector( pcol ) )
 		ply:SetWeaponColor( Vector( wcol ) )
 		
-		ply:SetupHands( )
+		local oldhands = ply:GetHands()
+		if ( IsValid( oldhands ) ) then oldhands:Remove() end
+		local hands = ents.Create( "gmod_hands" )
+		if ( IsValid( hands ) ) then
+			ply:SetHands( hands )
+			hands:SetOwner( ply )
+			-- Which hands should we use?
+			local info = player_manager.TranslatePlayerHands( mdlname )
+			if ( info ) then
+				hands:SetModel( info.model )
+				hands:SetSkin( info.skin )
+				hands:SetBodyGroups( info.body )
+			end
+			-- Attach them to the viewmodel
+			local vm = ply:GetViewModel( 0 )
+			hands:AttachToViewmodel( vm )
+			vm:DeleteOnRemove( hands )
+			ply:DeleteOnRemove( hands )
+			hands:Spawn()
+		end
 		
 		if legs_installed then
 			ply:SetNWString( "realModel", mdlpath )
@@ -119,6 +138,7 @@ end
 if CLIENT then
 
 
+local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk" }
 local Favorites = { }
@@ -165,7 +185,7 @@ end
 hook.Add( "OnTextEntryLoseFocus", "lf_playermodel_keyboard_off", KeyboardOff )
 
 
-local function Menu()
+function Menu.Setup()
 
 	Frame = vgui.Create( "DFrame" )
 	local fw, fh = 960, 700
@@ -253,7 +273,7 @@ local function Menu()
 		local t = favorites:Add( "DLabel", panel )
 		t:Dock( TOP )
 		t:SetSize( 0, 65 )
-		t:SetText( "Here you can save your favorite playermodel combinations. To do this:\n1. Select a model in the Model tab.\n2. Setup the skin, bodygroups and flexes as you wish.\n3. Enter a unique name into the textfield and click Add new favorite." )
+		t:SetText( "Here you can save your favorite playermodel combinations. To do this:\n1. Select a model in the Model tab.\n2. Setup the skin and bodygroups as you wish.\n3. Enter a unique name into the textfield and click Add new favorite." )
 		t:SetDark( true )
 		t:SetWrap( true )
 		
@@ -270,23 +290,23 @@ local function Menu()
 		FavList:AddColumn( "Skin" ):SetFixedWidth( 25 )
 		FavList:AddColumn( "Bodygroups" )
 		
-		local function FavPopulate()
+		function Menu.FavPopulate()
 			FavList:Clear()
 			for k, v in pairs( Favorites ) do
 				FavList:AddLine( k, v.model, v.skin, v.bodygroups )
 			end
 			FavList:SortByColumn( 1 )
 		end
-		FavPopulate()
+		Menu.FavPopulate()
 		
-		local function FavAdd( name )
+		function Menu.FavAdd( name )
 			Favorites[name] = { }
 			Favorites[name].model = LocalPlayer():GetInfo( "cl_playermodel" )
 			Favorites[name].skin = LocalPlayer():GetInfoNum( "cl_playerskin", 0 )
 			Favorites[name].bodygroups = LocalPlayer():GetInfo( "cl_playerbodygroups" )
-			Favorites[name].flexes = LocalPlayer():GetInfo( "cl_playerflexes" )
+			--Favorites[name].flexes = LocalPlayer():GetInfo( "cl_playerflexes" )
 			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites ) )
-			FavPopulate()
+			Menu.FavPopulate()
 		end
 		
 		local FavEntry = control:Add( "DTextEntry" )
@@ -300,7 +320,7 @@ local function Menu()
 		b.DoClick = function()
 			local name = FavEntry:GetValue()
 			if name == "" then return end
-			FavAdd( name )
+			Menu.FavAdd( name )
 		end
 		
 		local b = control:Add( "DButton", panel )
@@ -311,7 +331,7 @@ local function Menu()
 			local sel = FavList:GetSelected()
 			if !sel[1] then return end
 			local name = tostring( sel[1]:GetValue(1) )
-			FavAdd( name )
+			Menu.FavAdd( name )
 		end
 		
 		local b = control:Add( "DButton", panel )
@@ -325,7 +345,7 @@ local function Menu()
 				Favorites[name] = nil
 			end
 			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites ) )
-			FavPopulate()
+			Menu.FavPopulate()
 		end
 		
 		local b = control:Add( "DButton", panel )
@@ -342,7 +362,7 @@ local function Menu()
 					PanelSelect:FindBestActive()
 					RunConsoleCommand( "cl_playerbodygroups", Favorites[name].bodygroups )
 					RunConsoleCommand( "cl_playerskin", Favorites[name].skin )
-					RunConsoleCommand( "cl_playerflexes", Favorites[name].flexes )
+					--RunConsoleCommand( "cl_playerflexes", Favorites[name].flexes )
 				end )
 			end
 		end
@@ -364,7 +384,7 @@ local function Menu()
 		local t = flexcontrols:Add( "DLabel", panel )
 		t:Dock( TOP )
 		t:SetSize( 0, 30 )
-		t:SetText( "Note: The model preview for flexes doesn't work correcty.\nHowever, they will be visible on your playermodel when you apply them." )
+		t:SetText( "Note: The model preview for flexes doesn't work correctly.\nHowever, they will be visible on your playermodel when you apply them." )
 		t:SetDark( true )
 		t:SetWrap( true )
 		
@@ -448,18 +468,8 @@ local function Menu()
 			c.OnChange = ChangeCVar
 			
 			local c = panel:Add( "DCheckBoxLabel" )
-			c.cvar = "sv_playermodel_selector_flexes"
-			c:SetPos( 10, 80 )
-			c:SetValue( GetConVar(c.cvar):GetBool() )
-			c:SetText( "Allow players to change flexes" )
-			c:SetTooltip( "If enabled, players can change the flexes for their playermodels." )
-			c:SetDark( true )
-			c:SizeToContents()
-			c.OnChange = ChangeCVar
-			
-			local c = panel:Add( "DCheckBoxLabel" )
 			c.cvar = "sv_playermodel_selector_gamemodes"
-			c:SetPos( 10, 110 )
+			c:SetPos( 10, 80 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Allow playermodel enforcement" )
 			c:SetTooltip( "If enabled, the selected playermodel will be applied upon spawn in every gamemode." )
@@ -468,13 +478,13 @@ local function Menu()
 			c.OnChange = ChangeCVar
 			
 			local t = panel:Add( "DLabel" )
-			t:SetPos( 10, 140 )
+			t:SetPos( 10, 110 )
 			t:SetSize( 80, 20 )
 			t:SetDark( true )
 			t:SetText( "Force Delay:" )
 			
 			local c = panel:Add( "DTextEntry" )
-				c:SetPos( 100, 140 )
+				c:SetPos( 100, 110 )
 				c:SetSize( 40, 20 )
 				c:SetNumeric( true )
 				c:SetValue( GetConVar("sv_playermodel_selector_delay"):GetString() )
@@ -488,17 +498,28 @@ local function Menu()
 				end
 			
 			local t = panel:Add( "DLabel" )
-			t:SetPos( 145, 140 )
+			t:SetPos( 145, 110 )
 			t:SetSize( 200, 20 )
 			t:SetDark( true )
 			t:SetText( "ms    (Min: 10, Max: 2000, Default: 100)" )
+			
+			local c = panel:Add( "DCheckBoxLabel" )
+			c.cvar = "sv_playermodel_selector_flexes"
+			c:SetPos( 10, 170 )
+			c:SetValue( GetConVar(c.cvar):GetBool() )
+			c:SetText( "Experimental: Allow players to change flexes" )
+			c:SetTooltip( "If enabled, players can change the flexes for their playermodels.\nThis might breaks a lot of things, including player blinking. Use at own risk.\nChanges to playermodel flexes can only be reset by disconnecting! Always disabled by default." )
+			c:SetDark( true )
+			c:SizeToContents()
+			c.OnChange = ChangeCVar
+			c:SetDisabled(true)
 			
 		end
 
 
 	-- Helper functions
 
-	local function MakeNiceName( str )
+	function Menu.MakeNiceName( str )
 		local newname = {}
 
 		for _, s in pairs( string.Explode( "_", str ) ) do
@@ -509,7 +530,7 @@ local function Menu()
 		return string.Implode( " ", newname )
 	end
 
-	local function PlayPreviewAnimation( panel, playermodel )
+	function Menu.PlayPreviewAnimation( panel, playermodel )
 
 		if ( !panel or !IsValid( panel.Entity ) ) then return end
 
@@ -528,7 +549,7 @@ local function Menu()
 
 	-- Updating
 
-	local function UpdateBodyGroups( pnl, val )
+	function Menu.UpdateBodyGroups( pnl, val )
 		if ( pnl.type == "bgroup" ) then
 
 			mdl.Entity:SetBodygroup( pnl.typenum, math.Round( val ) )
@@ -555,7 +576,7 @@ local function Menu()
 		end
 	end
 
-	local function RebuildBodygroupTab()
+	function Menu.RebuildBodygroupTab()
 		bdcontrolspanel:Clear()
 		flexcontrolspanel:Clear()
 		
@@ -573,7 +594,7 @@ local function Menu()
 			skins:SetMax( nskins )
 			skins:SetValue( GetConVar( "cl_playerskin" ):GetInt() )
 			skins.type = "skin"
-			skins.OnValueChanged = UpdateBodyGroups
+			skins.OnValueChanged = Menu.UpdateBodyGroups
 			
 			bdcontrolspanel:AddItem( skins )
 
@@ -588,7 +609,7 @@ local function Menu()
 
 			local bgroup = vgui.Create( "DNumSlider" )
 			bgroup:Dock( TOP )
-			bgroup:SetText( MakeNiceName( mdl.Entity:GetBodygroupName( k ) ) )
+			bgroup:SetText( Menu.MakeNiceName( mdl.Entity:GetBodygroupName( k ) ) )
 			bgroup:SetDark( true )
 			bgroup:SetTall( 50 )
 			bgroup:SetDecimals( 0 )
@@ -596,7 +617,7 @@ local function Menu()
 			bgroup.typenum = k
 			bgroup:SetMax( mdl.Entity:GetBodygroupCount( k ) - 1 )
 			bgroup:SetValue( groups[ k + 1 ] or 0 )
-			bgroup.OnValueChanged = UpdateBodyGroups
+			bgroup.OnValueChanged = Menu.UpdateBodyGroups
 			
 			bdcontrolspanel:AddItem( bgroup )
 
@@ -605,33 +626,37 @@ local function Menu()
 			bgtab.Tab:SetVisible( true )
 		end
 		
-		if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
+		--[[if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() then
 			local flexes = string.Explode( " ", GetConVar( "cl_playerflexes" ):GetString() )
 			for k = 0, mdl.Entity:GetFlexNum() - 1 do
 				if ( mdl.Entity:GetFlexNum( k ) <= 1 ) then continue end
 
 				local flex = vgui.Create( "DNumSlider" )
+				local vmin, vmax = mdl.Entity:GetFlexBounds( k )
+				local default = 0
+				if vmin == -1 and vmax == 1 then default = 0.5 end
 				flex:Dock( TOP )
-				flex:SetText( MakeNiceName( mdl.Entity:GetFlexName( k ) ) )
+				flex:SetText( Menu.MakeNiceName( mdl.Entity:GetFlexName( k ) ) )
 				flex:SetDark( true )
 				flex:SetTall( 50 )
 				flex:SetDecimals( 2 )
 				flex.type = "flex"
 				flex.typenum = k
-				flex:SetMax( 1 )
-				flex:SetValue( flexes[ k + 1 ] or 0 )
-				flex.OnValueChanged = UpdateBodyGroups
+				flex:SetMin( vmin )
+				flex:SetMax( vmax )
+				flex:SetValue( flexes[ k + 1 ] or default )
+				flex.OnValueChanged = Menu.UpdateBodyGroups
 				
 				flexcontrolspanel:AddItem( flex )
 
-				mdl.Entity:SetFlexWeight( k, flexes[ k + 1 ] or 0 )
+				mdl.Entity:SetFlexWeight( k, flexes[ k + 1 ] or default )
 				
 				flextab.Tab:SetVisible( true )
 			end
-		end
+		end]]
 	end
 	
-	local function UpdateFromConvars()
+	function Menu.UpdateFromConvars()
 
 		local model = LocalPlayer():GetInfo( "cl_playermodel" )
 		local modelname = player_manager.TranslatePlayerModel( model )
@@ -643,22 +668,22 @@ local function Menu()
 		plycol:SetVector( Vector( GetConVar( "cl_playercolor" ):GetString() ) )
 		wepcol:SetVector( Vector( GetConVar( "cl_weaponcolor" ):GetString() ) )
 
-		PlayPreviewAnimation( mdl, model )
-		RebuildBodygroupTab()
+		Menu.PlayPreviewAnimation( mdl, model )
+		Menu.RebuildBodygroupTab()
 
 	end
 
-	local function UpdateFromControls()
+	function Menu.UpdateFromControls()
 
 		RunConsoleCommand( "cl_playercolor", tostring( plycol:GetVector() ) )
 		RunConsoleCommand( "cl_weaponcolor", tostring( wepcol:GetVector() ) )
 
 	end
 
-	plycol.ValueChanged = UpdateFromControls
-	wepcol.ValueChanged = UpdateFromControls
+	plycol.ValueChanged = Menu.UpdateFromControls
+	wepcol.ValueChanged = Menu.UpdateFromControls
 
-	UpdateFromConvars()
+	Menu.UpdateFromConvars()
 
 	function PanelSelect:OnActivePanelChanged( old, new )
 
@@ -668,7 +693,7 @@ local function Menu()
 			RunConsoleCommand( "cl_playerflexes", "0" )
 		end
 
-		timer.Simple( 0.1, function() UpdateFromConvars() end )
+		timer.Simple( 0.1, function() Menu.UpdateFromConvars() end )
 
 	end
 
@@ -696,21 +721,21 @@ local function Menu()
 
 end
 
-local function MenuToggle()
+function Menu.Toggle()
 	if LocalPlayer():IsAdmin() or
 	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) )
 	then
 		if IsValid( Frame ) then
 			Frame:ToggleVisible()
 		else
-			Menu()
+			Menu.Setup()
 		end
 	else
 		if IsValid( Frame ) then Frame:Close() end
 	end
 end
 
-concommand.Add( "playermodel_selector", MenuToggle )
+concommand.Add( "playermodel_selector", Menu.Toggle )
 
 
 hook.Add( "Initialize", "lf_playermodel_desktop_hook", function()
