@@ -145,8 +145,12 @@ local Favorites = { }
 local flexes_unlocked = false
 
 if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
-	Favorites = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
-	if !istable( Favorites ) then Favorites = { } end
+	local loaded = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
+	if istable( loaded ) then
+		for k,v in pairs( loaded ) do
+			Favorites[tostring(k)] = v
+		end
+	end
 end
 
 
@@ -171,7 +175,7 @@ end )
 
 
 net.Receive("lf_playermodel_update", function()
-		include( "autorun/sh_legs.lua" )
+	include( "autorun/sh_legs.lua" )
 end)
 
 local function KeyboardOn( pnl )
@@ -333,7 +337,7 @@ function Menu.Setup()
 		FavEntry:SetPos( 0, 0 )
 		FavEntry:SetSize( 260, 20 )
 		
-		local b = control:Add( "DButton", panel )
+		local b = control:Add( "DButton" )
 		b:SetPos( 270, 0 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Add new favorite" )
@@ -343,7 +347,7 @@ function Menu.Setup()
 			Menu.FavAdd( name )
 		end
 		
-		local b = control:Add( "DButton", panel )
+		local b = control:Add( "DButton" )
 		b:SetPos( 270, 30 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Overwrite selected" )
@@ -354,7 +358,7 @@ function Menu.Setup()
 			Menu.FavAdd( name )
 		end
 		
-		local b = control:Add( "DButton", panel )
+		local b = control:Add( "DButton" )
 		b:SetPos( 135, 30 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Delete all selected" )
@@ -368,7 +372,7 @@ function Menu.Setup()
 			Menu.FavPopulate()
 		end
 		
-		local b = control:Add( "DButton", panel )
+		local b = control:Add( "DButton" )
 		b:SetPos( 0, 30 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Load selected" )
