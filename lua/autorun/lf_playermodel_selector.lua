@@ -8,18 +8,21 @@ if SERVER then
 
 AddCSLuaFile()
 
+util.AddNetworkString("lf_playermodel_cvar_sync")
+util.AddNetworkString("lf_playermodel_cvar_change")
+util.AddNetworkString("lf_playermodel_blacklist")
+util.AddNetworkString("lf_playermodel_update")
+
 local convars = { }
-convars["sv_playermodel_selector_enabled"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+convars["sv_playermodel_selector_force"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_gamemodes"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_instantly"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_delay"]		= { 100, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
 for cvar, v in pairs( convars ) do
 	CreateConVar( cvar,	v[1], v[2] )
 end
 
-util.AddNetworkString("lf_playermodel_cvar_sync")
 hook.Add( "PlayerAuthed", "lf_playermodel_cvar_sync_hook", function( ply )
 	local tbl = { }
 	for cvar in pairs( convars ) do
@@ -30,30 +33,70 @@ hook.Add( "PlayerAuthed", "lf_playermodel_cvar_sync_hook", function( ply )
 	net.Send( ply )
 end )
 
-util.AddNetworkString("lf_playermodel_cvar_change")
-net.Receive("lf_playermodel_cvar_change", function(len,ply)
+net.Receive("lf_playermodel_cvar_change", function( len, ply )
 	if ply:IsValid() and ply:IsPlayer() then
 		local cvar = net.ReadString()
 		if !convars[cvar] then ply:Kick("Illegal convar change") return end
 		if !ply:IsAdmin() then return end
 		RunConsoleCommand( cvar, net.ReadString() )
 	end
-end)
+end )
 
+
+local Blacklist = { }
+if file.Exists( "playermodel_selector_blacklist.txt", "DATA" ) then
+	local loaded = util.JSONToTable( file.Read( "playermodel_selector_blacklist.txt", "DATA" ) )
+	if istable( loaded ) then
+		for k, v in pairs( loaded ) do
+			Blacklist[tostring(k)] = v
+		end
+	end
+end
+
+net.Receive("lf_playermodel_blacklist", function( len, ply )
+	if ply:IsValid() and ply:IsPlayer() then
+		local mode = net.ReadInt( 3 )
+		if mode == 1 then
+			local gamemode = net.ReadString()
+			if gamemode != "sandbox" then
+				Blacklist[gamemode] = true
+				file.Write( "playermodel_selector_blacklist.txt", util.TableToJSON( Blacklist, true ) )
+			end
+		elseif mode == 2 then
+			local tbl = net.ReadTable()
+			if istable( tbl ) then
+				for k, v in pairs( tbl ) do
+					local name = tostring( v )
+					Blacklist[v] = nil
+				end
+				file.Write( "playermodel_selector_blacklist.txt", util.TableToJSON( Blacklist, true ) )
+			end
+		end
+		net.Start("lf_playermodel_blacklist")
+		net.WriteTable( Blacklist )
+		net.Send( ply )
+	end
+end )
 
 local legs_installed = false
 if file.Exists( "autorun/sh_legs.lua", "LUA" ) then legs_installed = true end
 
+local plymeta = FindMetaTable( "Player" )
+
+local function Allowed( ply )
+	if GAMEMODE_NAME == "sandbox" or ( !Blacklist[GAMEMODE_NAME] and ( ply:IsAdmin() or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) ) then
+		return true	else return false
+	end
+end
+
 
 local function UpdatePlayerModel( ply )
-	if ply:IsAdmin() or
-	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) )
-	then
+	if Allowed( ply ) then
 	
 		local mdlname = ply:GetInfo( "cl_playermodel" )
 		local mdlpath = player_manager.TranslatePlayerModel( mdlname )
 		
-		ply:SetModel( mdlpath )
+		ply:LF_SetModel( mdlpath )
 		
 		local skin = ply:GetInfoNum( "cl_playerskin", 0 )
 		ply:SetSkin( skin )
@@ -79,26 +122,28 @@ local function UpdatePlayerModel( ply )
 		ply:SetPlayerColor( Vector( pcol ) )
 		ply:SetWeaponColor( Vector( wcol ) )
 		
-		local oldhands = ply:GetHands()
-		if ( IsValid( oldhands ) ) then oldhands:Remove() end
-		local hands = ents.Create( "gmod_hands" )
-		if ( IsValid( hands ) ) then
-			ply:SetHands( hands )
-			hands:SetOwner( ply )
-			-- Which hands should we use?
-			local info = player_manager.TranslatePlayerHands( mdlname )
-			if ( info ) then
-				hands:SetModel( info.model )
-				hands:SetSkin( info.skin )
-				hands:SetBodyGroups( info.body )
+		timer.Simple( 0.2, function()
+			local oldhands = ply:GetHands()
+			if ( IsValid( oldhands ) ) then oldhands:Remove() end
+			local hands = ents.Create( "gmod_hands" )
+			if ( IsValid( hands ) ) then
+				ply:SetHands( hands )
+				hands:SetOwner( ply )
+				-- Which hands should we use?
+				local info = player_manager.TranslatePlayerHands( mdlname )
+				if ( info ) then
+					hands:SetModel( info.model )
+					hands:SetSkin( info.skin )
+					hands:SetBodyGroups( info.body )
+				end
+				-- Attach them to the viewmodel
+				local vm = ply:GetViewModel( 0 )
+				hands:AttachToViewmodel( vm )
+				vm:DeleteOnRemove( hands )
+				ply:DeleteOnRemove( hands )
+				hands:Spawn()
 			end
-			-- Attach them to the viewmodel
-			local vm = ply:GetViewModel( 0 )
-			hands:AttachToViewmodel( vm )
-			vm:DeleteOnRemove( hands )
-			ply:DeleteOnRemove( hands )
-			hands:Spawn()
-		end
+		end )
 		
 		if legs_installed then
 			ply:SetNWString( "realModel", mdlpath )
@@ -111,24 +156,39 @@ local function UpdatePlayerModel( ply )
 	end
 end
 
-util.AddNetworkString("lf_playermodel_update")
-net.Receive("lf_playermodel_update", function(len,ply)
-	if ply:IsValid() and ply:IsPlayer() then
+net.Receive("lf_playermodel_update", function( len, ply )
+	if ply:IsValid() and ply:IsPlayer() and ( ply:IsAdmin() or GetConVar( "sv_playermodel_selector_instantly"):GetBool() ) then
 		UpdatePlayerModel( ply )
 	end
-end)
+end )
 
-hook.Add( "PlayerSpawn", "lf_playermodel_force_hook", function( ply )
-	if GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
-		local delay = GetConVar( "sv_playermodel_selector_delay" ):GetInt()
-		if delay > 2000 then delay = 2000
-		elseif delay < 10 then delay = 10
-		end
-		timer.Simple( delay / 1000, function()
-			UpdatePlayerModel( ply )
-		end)
+hook.Add( "PlayerSpawn", "lf_playermodel_force_hook1", function( ply )
+	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
+		UpdatePlayerModel( ply )
 	end
-end)
+end )
+
+hook.Add( "PlayerSetModel", "lf_playermodel_force_hook2", function( ply )
+	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
+		return false
+	end
+end )
+
+local function ToggleForce()
+	if GetConVar( "sv_playermodel_selector_force" ):GetBool() then
+		plymeta.SetModel = function( ply, mdl )
+			if Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
+			else
+				ply:LF_SetModel( mdl )
+			end
+		end
+	else
+		plymeta.SetModel = nil
+	end
+end
+cvars.AddChangeCallback( "sv_playermodel_selector_force", ToggleForce )
+plymeta.LF_SetModel = plymeta.LF_SetModel or FindMetaTable("Entity").SetModel
+ToggleForce()
 
 
 end
@@ -147,7 +207,7 @@ local flexes_unlocked = false
 if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
 	local loaded = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
 	if istable( loaded ) then
-		for k,v in pairs( loaded ) do
+		for k, v in pairs( loaded ) do
 			Favorites[tostring(k)] = v
 		end
 	end
@@ -160,10 +220,10 @@ CreateClientConVar( "cl_playermodel_selector_bgcolor_custom", "1", true, true )
 
 net.Receive("lf_playermodel_cvar_sync", function()
 	local tbl = net.ReadTable()
-	for k,v in pairs( tbl ) do
+	for k, v in pairs( tbl ) do
 		CreateConVar( k, v, { FCVAR_REPLICATED } )
 	end
-end)
+end )
 
 hook.Add( "PostGamemodeLoaded", "lf_playermodel_sboxcvars", function()
 	if !ConVarExists( "cl_playercolor" ) then CreateConVar( "cl_playercolor", "0.24 0.34 0.41", { FCVAR_ARCHIVE, FCVAR_USERINFO, FCVAR_DONTRECORD }, "The value is a Vector - so between 0-1 - not between 0-255" ) end
@@ -176,7 +236,7 @@ end )
 
 net.Receive("lf_playermodel_update", function()
 	include( "autorun/sh_legs.lua" )
-end)
+end )
 
 local function KeyboardOn( pnl )
 	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
@@ -238,6 +298,14 @@ function Menu.Setup()
 	mdl.Angles = Angle( 0, 0, 0 )
 	mdl:SetLookAt( Vector( -100, 0, -22 ) )
 
+	local b = Frame:Add( "DButton" )
+	b:SetSize( 30, 18 )
+	b:SetPos( 860, 3 )
+	b:SetText( "Info" )
+	b.DoClick = function()
+		gui.OpenURL( "http://steamcommunity.com/sharedfiles/filedetails/?id=504945881" )
+	end
+	
 	local topmenu = Frame:Add( "DPanel" )
 	topmenu:SetPaintBackground( false )
 	topmenu:Dock( TOP )
@@ -246,7 +314,7 @@ function Menu.Setup()
 	local b = topmenu:Add( "DButton" )
 	b:SetSize( 200, 30 )
 	b:SetPos( 0, 0 )
-	b:SetText( "Apply selected Playermodel" )
+	b:SetText( "Apply selected playermodel" )
 	b:SetEnabled( LocalPlayer():IsAdmin() or GetConVar( "sv_playermodel_selector_instantly" ):GetBool() )
 	b.DoClick = function()
 		if LocalPlayer():IsAdmin() or GetConVar( "sv_playermodel_selector_instantly" ):GetBool() then
@@ -259,8 +327,8 @@ function Menu.Setup()
 	c.cvar = "cl_playermodel_selector_force"
 	c:SetPos( 250, 8 )
 	c:SetValue( GetConVar(c.cvar):GetBool() )
-	c:SetText( "Force playermodel on spawn" )
-	c:SetTooltip( "If enabled, the selected playermodel will be\napplied upon spawn in every gamemode." )
+	c:SetText( "Enforce your playermodel" )
+	c:SetTooltip( "If enabled, your selected playermodel will\nbe protected. No other function will be\nable to change your playermodel anymore." )
 	c:SizeToContents()
 	c.Label.Paint = function ( self, w, h )
 		draw.SimpleTextOutlined( c.Label:GetText(), "DermaDefault", 0, 0, Color( 255, 255, 255, 255), 0, 0, 1, Color( 0, 0, 0, 255) ) return true
@@ -295,7 +363,7 @@ function Menu.Setup()
 		sheet:AddSheet( "Favorites", favorites, "icon16/star.png" )
 		favorites:DockPadding( 8, 8, 8, 8 )
 		
-		local t = favorites:Add( "DLabel", panel )
+		local t = favorites:Add( "DLabel" )
 		t:Dock( TOP )
 		t:SetSize( 0, 65 )
 		t:SetText( "Here you can save your favorite playermodel combinations. To do this:\n1. Select a model in the Model tab.\n2. Setup the skin and bodygroups as you wish.\n3. Enter a unique name into the textfield and click Add new favorite." )
@@ -329,7 +397,7 @@ function Menu.Setup()
 			Favorites[name].model = LocalPlayer():GetInfo( "cl_playermodel" )
 			Favorites[name].skin = LocalPlayer():GetInfoNum( "cl_playerskin", 0 )
 			Favorites[name].bodygroups = LocalPlayer():GetInfo( "cl_playerbodygroups" )
-			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites ) )
+			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites, true ) )
 			Menu.FavPopulate()
 		end
 		
@@ -364,7 +432,7 @@ function Menu.Setup()
 		b:SetText( "Delete all selected" )
 		b.DoClick = function()
 			local sel = FavList:GetSelected()
-			for k,v in pairs( sel ) do
+			for k, v in pairs( sel ) do
 				local name = tostring( v:GetValue(1) )
 				Favorites[name] = nil
 			end
@@ -466,7 +534,7 @@ function Menu.Setup()
 			
 			local panel = sheet:Add( "DPanel" )
 			sheet:AddSheet( "Admin", panel, "icon16/key.png" )
-			panel:DockPadding( 8, 8, 8, 8 )
+			panel:DockPadding( 10, 10, 10, 10 )
 			
 			local function ChangeCVar( p, v )
 				net.Start("lf_playermodel_cvar_change")
@@ -476,70 +544,157 @@ function Menu.Setup()
 			end
 			
 			local c = panel:Add( "DCheckBoxLabel" )
-			c.cvar = "sv_playermodel_selector_enabled"
-			c:SetPos( 10, 20 )
+			c.cvar = "sv_playermodel_selector_force"
+			c:Dock( TOP )
+			c:DockMargin( 0, 0, 0, 5 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
-			c:SetText( "Enable menu for all players" )
-			c:SetTooltip( "If enabled, the Playermodel Selector can be used\nby all players. If disabled, only admins can use it." )
+			c:SetText( "Enable playermodel enforcement" )
 			c:SetDark( true )
-			c:SizeToContents()
 			c.OnChange = ChangeCVar
+			
+			local t = panel:Add( "DLabel" )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "If enabled, selected playermodels will be enforced and protected. No gamemodes, maps or addons can overwrite them anymore. Players can toggle this function individually, using the checkbox on top of the menu.\nIf disabled, only the manual button works outside of Sandbox." )
+			t:SetDark( true )
+			t:SetWrap( true )
 			
 			local c = panel:Add( "DCheckBoxLabel" )
 			c.cvar = "sv_playermodel_selector_instantly"
-			c:SetPos( 10, 50 )
+			c:Dock( TOP )
+			c:DockMargin( 0, 0, 0, 5 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
 			c:SetText( "Allow instant changes" )
-			c:SetTooltip( "If enabled, players can apply their changes\ninstantly instead of having to respawn." )
 			c:SetDark( true )
-			c:SizeToContents()
-			c.OnChange = ChangeCVar
-			
-			local c = panel:Add( "DCheckBoxLabel" )
-			c.cvar = "sv_playermodel_selector_gamemodes"
-			c:SetPos( 10, 80 )
-			c:SetValue( GetConVar(c.cvar):GetBool() )
-			c:SetText( "Allow playermodel enforcement" )
-			c:SetTooltip( "If enabled, the selected playermodel will be\napplied upon spawn in every gamemode." )
-			c:SetDark( true )
-			c:SizeToContents()
 			c.OnChange = ChangeCVar
 			
 			local t = panel:Add( "DLabel" )
-			t:SetPos( 10, 110 )
-			t:SetSize( 80, 20 )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "If enabled, players can apply their changes instantly instead of having to respawn." )
 			t:SetDark( true )
-			t:SetText( "Force Delay:" )
-			
-			local c = panel:Add( "DTextEntry" )
-				c:SetPos( 100, 110 )
-				c:SetSize( 40, 20 )
-				c:SetNumeric( true )
-				c:SetValue( GetConVar("sv_playermodel_selector_delay"):GetString() )
-				c:SetTooltip( "Delay until your playermodel is enforced.\nIncrease, if it's still overwritten. Decrease, for smoother spawning.\nRecommended to keep on default, unless you encounter problems." )
-				c.OnLoseFocus = function()
-					Frame:SetKeyboardInputEnabled( false )
-					net.Start("lf_playermodel_cvar_change")
-					net.WriteString( "sv_playermodel_selector_delay" )
-					net.WriteString( c:GetValue() )
-					net.SendToServer()
-				end
-			
-			local t = panel:Add( "DLabel" )
-			t:SetPos( 145, 110 )
-			t:SetSize( 200, 20 )
-			t:SetDark( true )
-			t:SetText( "ms    (Min: 10, Max: 2000, Default: 100)" )
+			t:SetWrap( true )
 			
 			local c = panel:Add( "DCheckBoxLabel" )
 			c.cvar = "sv_playermodel_selector_flexes"
-			c:SetPos( 10, 170 )
+			c:Dock( TOP )
+			c:DockMargin( 0, 0, 0, 5 )
 			c:SetValue( GetConVar(c.cvar):GetBool() )
-			c:SetText( "Experimental: Allow players to change flexes" )
-			c:SetTooltip( "If enabled, players can change the flexes for their playermodels.\nThis might break a lot of things, including player blinking. Use at own risk.\nChanges to playermodel flexes can only be reset by disconnecting!" )
+			c:SetText( "Allow players to change flexes" )
 			c:SetDark( true )
-			c:SizeToContents()
 			c.OnChange = ChangeCVar
+			
+			local t = panel:Add( "DLabel" )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "If enabled, players can change the flexes for their playermodels. This will break player blinking and may cause other issues. Enable at own risk. Players can only reset their flexes by disconnecting." )
+			t:SetDark( true )
+			t:SetWrap( true )
+			
+			local c = panel:Add( "DCheckBoxLabel" )
+			c.cvar = "sv_playermodel_selector_gamemodes"
+			c:Dock( TOP )
+			c:DockMargin( 0, 0, 0, 5 )
+			c:SetValue( GetConVar(c.cvar):GetBool() )
+			c:SetText( "Enable in all gamemodes" )
+			c:SetDark( true )
+			c.OnChange = ChangeCVar
+			
+			local t = panel:Add( "DLabel" )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "If enabled, the PlayerModel Selector will be available for all players in every gamemode. If disabled, only Admins can use it outside of Sandbox." )
+			t:SetDark( true )
+			t:SetWrap( true )
+			
+			local panel2 = panel:Add( "DPanel" )
+			panel2:Dock( FILL )
+			panel2:SetPaintBackground( false )
+			
+			local Blacklist = panel2:Add( "DListView" )
+			Blacklist:Dock( LEFT )
+			Blacklist:DockMargin( 0, 0, 20, 0 )
+			Blacklist:SetWidth( 150 )
+			Blacklist:SetMultiSelect( true )
+			Blacklist:AddColumn( "Blacklisted gamemodes" )
+			
+			net.Receive("lf_playermodel_blacklist", function()
+				local tbl = net.ReadTable()
+				Blacklist:Clear()
+				for k, v in pairs( tbl ) do
+					Blacklist:AddLine( k )
+					Blacklist:SortByColumn( 1 )
+				end
+			end )
+			
+			function Menu.BlacklistPopulate()
+				net.Start( "lf_playermodel_blacklist" )
+				net.WriteInt( 0, 3 )
+				net.SendToServer()
+			end
+			Menu.BlacklistPopulate()
+			
+			local t = panel2:Add( "DLabel" )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "Here you can blacklist incompatible gamemodes.\n\nPlayers (including Admins) can't change their playermodels in those gamemodes, regardless of other settings." )
+			t:SetDark( true )
+			t:SetWrap( true )
+			
+			local b = panel2:Add( "DButton" )
+			b:Dock( TOP )
+			b:DockMargin( 0, 0, 0, 20 )
+			b:SetHeight( 25 )
+			b:SetText( "Add current gamemode to Blacklist" )
+			b.DoClick = function()
+				if GAMEMODE_NAME == "sandbox" then return end
+				net.Start( "lf_playermodel_blacklist" )
+				net.WriteInt( 1, 3 )
+				net.WriteString( GAMEMODE_NAME )
+				net.SendToServer()
+			end
+			
+			local TextEntry = panel2:Add( "DTextEntry" )
+			TextEntry:Dock( TOP )
+			TextEntry:DockMargin( 0, 0, 0, 10 )
+			TextEntry:SetHeight( 20 )
+			
+			local b = panel2:Add( "DButton" )
+			b:Dock( TOP )
+			b:DockMargin( 0, 0, 0, 20 )
+			b:SetHeight( 20 )
+			b:SetText( "Manually add gamemode" )
+			b.DoClick = function()
+				local name = TextEntry:GetValue()
+				if name == "" or name == "sandbox" then return end
+				net.Start( "lf_playermodel_blacklist" )
+				net.WriteInt( 1, 3 )
+				net.WriteString( name )
+				net.SendToServer()
+			end
+			
+			local b = panel2:Add( "DButton" )
+			b:Dock( TOP )
+			b:DockMargin( 0, 0, 0, 0 )
+			b:SetHeight( 25 )
+			b:SetText( "Remove all selected gamemodes" )
+			b.DoClick = function()
+				local tbl = { }
+				local sel = Blacklist:GetSelected()
+				for k, v in pairs( sel ) do
+					local name = tostring( v:GetValue(1) )
+					table.insert( tbl, name )
+				end
+				net.Start( "lf_playermodel_blacklist" )
+				net.WriteInt( 2, 3 )
+				net.WriteTable( tbl )
+				net.SendToServer()
+			end
 			
 		end
 
@@ -717,8 +872,7 @@ function Menu.Setup()
 				t:SetWrap( true )
 				flexcontrolspanel:AddItem( t )
 				
-				local b = vgui.Create( "DButton", panel )
-				--b:SetPos( 270, 0 )
+				local b = vgui.Create( "DButton" )
 				b:Dock( TOP )
 				b:DockPadding( 100, 100, 20, 20 )
 				b:SetTall( 30 )
@@ -801,8 +955,7 @@ function Menu.Setup()
 end
 
 function Menu.Toggle()
-	if LocalPlayer():IsAdmin() or
-	( GetConVar( "sv_playermodel_selector_enabled"):GetBool() and ( GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) )
+	if LocalPlayer():IsAdmin() or GAMEMODE_NAME == "sandbox" or GetConVar( "sv_playermodel_selector_gamemodes" ):GetBool()
 	then
 		if IsValid( Frame ) then
 			Frame:ToggleVisible()
