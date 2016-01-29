@@ -268,7 +268,14 @@ function Menu.Setup()
 	local r, g, b = 97, 100, 102
 	if GetConVar( "cl_playermodel_selector_bgcolor_custom" ):GetBool() then
 		local bgcolor = string.Explode( " ", GetConVar( "cl_playercolor" ):GetString() )
-		r, g, b = math.Round( bgcolor[1] * 255 ), math.Round( bgcolor[2] * 255 ), math.Round( bgcolor[3] * 255 )
+		bgcolor[1] = tonumber( bgcolor[1] )
+		bgcolor[2] = tonumber( bgcolor[2] )
+		bgcolor[3] = tonumber( bgcolor[3] )
+		if isnumber( bgcolor[1] ) and isnumber( bgcolor[2] ) and isnumber( bgcolor[3] ) then
+			r, g, b = math.Round( bgcolor[1] * 255 ), math.Round( bgcolor[2] * 255 ), math.Round( bgcolor[3] * 255 )
+		else
+			timer.Simple( 0.1, function() RunConsoleCommand( "cl_playercolor", "0.24 0.34 0.41" ) end )
+		end
 	end
 	Frame.Paint = function( self, w, h )
 		draw.RoundedBox( 10, 0, 0, w, h, Color( r, g, b, 127 ) ) return true
