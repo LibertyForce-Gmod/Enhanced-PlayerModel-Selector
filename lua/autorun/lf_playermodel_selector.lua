@@ -146,11 +146,7 @@ local function UpdatePlayerModel( ply )
 		end )
 		
 		if legs_installed then
-			ply:SetNWString( "realModel", mdlpath )
-			timer.Simple( 0.1, function()
-				net.Start("lf_playermodel_update")
-				net.Send( ply )
-			end )
+			ply:ConCommand( "cl_refreshlegs" )
 		end
 		
 	end
@@ -233,10 +229,6 @@ hook.Add( "PostGamemodeLoaded", "lf_playermodel_sboxcvars", function()
 	if !ConVarExists( "cl_playerflexes" ) then CreateConVar( "cl_playerflexes", "0", { FCVAR_ARCHIVE, FCVAR_USERINFO, FCVAR_DONTRECORD }, "The flexes to use, if the model has any" ) end
 end )
 
-
-net.Receive("lf_playermodel_update", function()
-	include( "autorun/sh_legs.lua" )
-end )
 
 local function KeyboardOn( pnl )
 	if ( IsValid( Frame ) and IsValid( pnl ) and pnl:HasParent( Frame ) ) then
