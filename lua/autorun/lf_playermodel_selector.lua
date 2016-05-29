@@ -18,6 +18,7 @@ convars["sv_playermodel_selector_force"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_R
 convars["sv_playermodel_selector_gamemodes"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_instantly"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+convars["sv_playermodel_selector_blacklist"]	= { "", bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
 
 for cvar, v in pairs( convars ) do
 	CreateConVar( cvar,	v[1], v[2] )
@@ -94,6 +95,17 @@ local function UpdatePlayerModel( ply )
 	if Allowed( ply ) then
 	
 		local mdlname = ply:GetInfo( "cl_playermodel" )
+		
+		local rmodelscvar = GetConVar( "sv_playermodel_selector_blacklist" ):GetString()
+		
+		if rmodelscvar!="" then
+			
+			local restricted_models_list = string.Explode( ",", rmodelscvar )
+			
+			if table.HasValue( restricted_models_list, mdlname ) then return end
+			
+		end
+		
 		local mdlpath = player_manager.TranslatePlayerModel( mdlname )
 		
 		ply:LF_SetModel( mdlpath )
@@ -199,6 +211,7 @@ local Frame
 local default_animations = { "idle_all_01", "menu_walk" }
 local Favorites = { }
 local flexes_unlocked = false
+local restricted_models = {}
 
 if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
 	local loaded = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
@@ -344,16 +357,37 @@ function Menu.Setup()
 		
 		local PanelSelect = sheet:Add( "DPanelSelect" )
 		sheet:AddSheet( "Model", PanelSelect, "icon16/user.png" )
+		
+		local models = player_manager.AllValidModels()
+		local rmodelscvar = GetConVar( "sv_playermodel_selector_blacklist" ):GetString()
+		
+		if #restricted_models>0 then
+			table.Empty( restricted_models )
+		end
+		
+		if rmodelscvar!="" then
+			
+			local restricted_models_list = string.Explode( ",", rmodelscvar )
+			
+			for _, name in pairs(restricted_models_list) do
+				restricted_models[name] = true
+			end
+			
+		end
 
-		for name, model in SortedPairs( player_manager.AllValidModels() ) do
+		for name, model in SortedPairs( models ) do
+			
+			if !restricted_models[name] then
+				
+				local icon = vgui.Create( "SpawnIcon" )
+				icon:SetModel( model )
+				icon:SetSize( 64, 64 )
+				icon:SetTooltip( name )
+				icon.playermodel = name
 
-			local icon = vgui.Create( "SpawnIcon" )
-			icon:SetModel( model )
-			icon:SetSize( 64, 64 )
-			icon:SetTooltip( name )
-			icon.playermodel = name
-
-			PanelSelect:AddPanel( icon, { cl_playermodel = name } )
+				PanelSelect:AddPanel( icon, { cl_playermodel = name } )
+				
+			end
 
 		end
 		
@@ -448,6 +482,7 @@ function Menu.Setup()
 			if !sel[1] then return end
 			local name = tostring( sel[1]:GetValue(1) )
 			if istable( Favorites[name] ) then
+				if restricted_models[Favorites[name].model] then return end
 				RunConsoleCommand( "cl_playermodel", Favorites[name].model )
 				timer.Simple( 0.1, function()
 					PanelSelect:FindBestActive()
