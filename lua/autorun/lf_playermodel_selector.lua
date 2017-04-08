@@ -3,36 +3,51 @@
 -- Based on: https://github.com/garrynewman/garrysmod/blob/1a2c317eeeef691e923453018236cf9f66ee74b4/garrysmod/gamemodes/sandbox/gamemode/editor_player.lua
 
 
+local flag = { FCVAR_REPLICATED }
+if SERVER then flag = { FCVAR_ARCHIVE, FCVAR_REPLICATED } end
+local convars = { }
+convars["sv_playermodel_selector_force"]		= 1
+convars["sv_playermodel_selector_gamemodes"]	= 1
+convars["sv_playermodel_selector_instantly"]	= 1
+convars["sv_playermodel_selector_flexes"]		= 0
+convars["sv_playermodel_selector_limit"]		= 1
+convars["sv_playermodel_selector_debug"]		= 0
+for cvar, def in pairs( convars ) do
+	CreateConVar( cvar,	def, flag )
+end
+
+
 if SERVER then
 
 
 AddCSLuaFile()
 
-util.AddNetworkString("lf_playermodel_cvar_sync")
+util.AddNetworkString("lf_playermodel_client_sync")
 util.AddNetworkString("lf_playermodel_cvar_change")
 util.AddNetworkString("lf_playermodel_blacklist")
+util.AddNetworkString("lf_playermodel_voxlist")
 util.AddNetworkString("lf_playermodel_update")
 
-local convars = { }
-convars["sv_playermodel_selector_force"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_gamemodes"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_instantly"]	= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_flexes"]		= { 0, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
-convars["sv_playermodel_selector_limit"]		= { 1, bit.bor( FCVAR_ARCHIVE, FCVAR_REPLICATED ) }
+local SetMDL = FindMetaTable("Entity").SetModel
 
-for cvar, v in pairs( convars ) do
-	CreateConVar( cvar,	v[1], v[2] )
-end
+local addon_legs = false
+if file.Exists( "autorun/sh_legs.lua", "LUA" ) then addon_legs = true end
+local addon_vox = false
+if file.Exists( "autorun/tfa_vox_loader.lua", "LUA" ) then addon_vox = true end
 
-hook.Add( "PlayerAuthed", "lf_playermodel_cvar_sync_hook", function( ply )
-	local tbl = { }
-	for cvar in pairs( convars ) do
-		tbl[cvar] = GetConVar(cvar):GetInt()
+local debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() or false
+cvars.AddChangeCallback( "sv_playermodel_selector_debug", function() debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() end )
+
+
+if addon_vox then
+	local function client_sync( ply )
+		net.Start("lf_playermodel_client_sync")
+		net.WriteBool( addon_vox )
+		net.Send( ply )
 	end
-	net.Start("lf_playermodel_cvar_sync")
-	net.WriteTable( tbl )
-	net.Send( ply )
-end )
+	hook.Add( "PlayerInitialSpawn", "lf_playermodel_client_sync_hook", client_sync )
+	net.Receive("lf_playermodel_client_sync", function( len, ply ) client_sync( ply ) end )
+end
 
 net.Receive("lf_playermodel_cvar_change", function( len, ply )
 	if ply:IsValid() and ply:IsPlayer() then
@@ -44,9 +59,18 @@ net.Receive("lf_playermodel_cvar_change", function( len, ply )
 end )
 
 
+if !file.Exists( "lf_playermodel_selector", "DATA" ) then file.CreateDir( "lf_playermodel_selector" ) end
+if file.Exists( "playermodel_selector_blacklist.txt", "DATA" ) then -- Migrate from old version
+	if !file.Exists( "lf_playermodel_selector/sv_blacklist.txt", "DATA" ) then
+		local content = file.Read( "playermodel_selector_blacklist.txt", "DATA" )
+		file.Write( "lf_playermodel_selector/sv_blacklist.txt", content )
+	end
+	file.Delete( "playermodel_selector_blacklist.txt" )
+end
+
 local Blacklist = { }
-if file.Exists( "playermodel_selector_blacklist.txt", "DATA" ) then
-	local loaded = util.JSONToTable( file.Read( "playermodel_selector_blacklist.txt", "DATA" ) )
+if file.Exists( "lf_playermodel_selector/sv_blacklist.txt", "DATA" ) then
+	local loaded = util.JSONToTable( file.Read( "lf_playermodel_selector/sv_blacklist.txt", "DATA" ) )
 	if istable( loaded ) then
 		for k, v in pairs( loaded ) do
 			Blacklist[tostring(k)] = v
@@ -62,16 +86,16 @@ net.Receive("lf_playermodel_blacklist", function( len, ply )
 			local gamemode = net.ReadString()
 			if gamemode != "sandbox" then
 				Blacklist[gamemode] = true
-				file.Write( "playermodel_selector_blacklist.txt", util.TableToJSON( Blacklist, true ) )
+				file.Write( "lf_playermodel_selector/sv_blacklist.txt", util.TableToJSON( Blacklist, true ) )
 			end
 		elseif mode == 2 then
 			local tbl = net.ReadTable()
 			if istable( tbl ) then
 				for k, v in pairs( tbl ) do
 					local name = tostring( v )
-					Blacklist[v] = nil
+					Blacklist[name] = nil
 				end
-				file.Write( "playermodel_selector_blacklist.txt", util.TableToJSON( Blacklist, true ) )
+				file.Write( "lf_playermodel_selector/sv_blacklist.txt", util.TableToJSON( Blacklist, true ) )
 			end
 		end
 		net.Start("lf_playermodel_blacklist")
@@ -80,8 +104,62 @@ net.Receive("lf_playermodel_blacklist", function( len, ply )
 	end
 end )
 
-local legs_installed = false
-if file.Exists( "autorun/sh_legs.lua", "LUA" ) then legs_installed = true end
+
+if addon_vox then
+	local VOXlist = { }
+
+	function lf_playermodel_selector_get_voxlist() -- global
+		return VOXlist
+	end
+
+	if file.Exists( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) then
+		local loaded = util.JSONToTable( file.Read( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) )
+		if istable( loaded ) then
+			for k, v in pairs( loaded ) do
+				VOXlist[tostring(k)] = tostring(v)
+			end
+			loaded = nil
+		end
+	end
+
+	net.Receive("lf_playermodel_voxlist", function( len, ply )
+		if ply:IsValid() and ply:IsPlayer() and ply:IsAdmin() then
+			local function tfa_reload()
+				TFAVOX_Packs_Initialize()
+				TFAVOX_PrecachePacks()
+				for k,v in pairs( player.GetAll() ) do
+					print("Resetting the VOX of " .. v:Nick() )
+					if IsValid(v) then TFAVOX_Init(v,true,true) end
+				end
+			end
+			local mode = net.ReadInt( 3 )
+			if mode == 1 then
+				local k = net.ReadString()
+				local v = net.ReadString()
+				VOXlist[k] = v
+				file.Write( "lf_playermodel_selector/sv_voxlist.txt", util.TableToJSON( VOXlist, true ) )
+				--TFAVOX_Models = { }
+				tfa_reload()
+			elseif mode == 2 then
+				local tbl = net.ReadTable()
+				if istable( tbl ) then
+					for k, v in pairs( tbl ) do
+						local name = tostring( v )
+						VOXlist[name] = nil
+						if istable( TFAVOX_Models ) then TFAVOX_Models[name] = nil end
+					end
+					file.Write( "lf_playermodel_selector/sv_voxlist.txt", util.TableToJSON( VOXlist, true ) )
+					--TFAVOX_Models = { }
+					tfa_reload()
+				end
+			end
+			net.Start("lf_playermodel_voxlist")
+			net.WriteTable( VOXlist )
+			net.Send( ply )
+		end
+	end )
+end
+
 
 local plymeta = FindMetaTable( "Player" )
 
@@ -94,20 +172,28 @@ end
 
 local function UpdatePlayerModel( ply )
 	if Allowed( ply ) then
-	
+		
+		ply.lf_playermodel_spawned = true
+		
+		if debugmode then print( "LF_PMS: Updating playermodel for: "..tostring( ply:GetName() ) ) end
+		
 		local mdlname = ply:GetInfo( "cl_playermodel" )
 		local mdlpath = player_manager.TranslatePlayerModel( mdlname )
 		
-		ply:LF_SetModel( mdlpath )
+		SetMDL( ply, mdlpath )
+		if debugmode then print( "LF_PMS: Set model to: "..tostring( mdlname ).." - "..tostring( mdlpath ) ) end
 		
 		local skin = ply:GetInfoNum( "cl_playerskin", 0 )
 		ply:SetSkin( skin )
+		if debugmode then print( "LF_PMS: Set model skin to no.: "..tostring( skin ) ) end
 		
 		local groups = ply:GetInfo( "cl_playerbodygroups" )
 		if ( groups == nil ) then groups = "" end
 		local groups = string.Explode( " ", groups )
 		for k = 0, ply:GetNumBodyGroups() - 1 do
-			ply:SetBodygroup( k, tonumber( groups[ k + 1 ] ) or 0 )
+			local v = tonumber( groups[ k + 1 ] ) or 0
+			ply:SetBodygroup( k, v )
+			if debugmode then print( "LF_PMS: Set bodygroup no. "..tostring( k ).." to: "..tostring( v ) ) end
 		end
 		
 		if GetConVar( "sv_playermodel_selector_flexes" ):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_unlockflexes", 0 ) ) then
@@ -124,30 +210,36 @@ local function UpdatePlayerModel( ply )
 		ply:SetPlayerColor( Vector( pcol ) )
 		ply:SetWeaponColor( Vector( wcol ) )
 		
+		timer.Simple( 0.1, function() if ply.SetupHands and isfunction( ply.SetupHands ) then ply:SetupHands() end end )
 		timer.Simple( 0.2, function()
-			local oldhands = ply:GetHands()
-			if ( IsValid( oldhands ) ) then oldhands:Remove() end
-			local hands = ents.Create( "gmod_hands" )
-			if ( IsValid( hands ) ) then
-				ply:SetHands( hands )
-				hands:SetOwner( ply )
-				-- Which hands should we use?
-				local info = player_manager.TranslatePlayerHands( mdlname )
-				if ( info ) then
-					hands:SetModel( info.model )
-					hands:SetSkin( info.skin )
-					hands:SetBodyGroups( info.body )
+			local mdlhands = player_manager.TranslatePlayerHands( mdlname )
+			local hands_ent = ply:GetHands()
+			if hands_ent and mdlhands and istable( mdlhands ) then
+				if hands_ent:GetModel() != mdlhands.model then
+					if debugmode then print( "LF_PMS: SetupHands failed. Gamemode doesn't implement this function correctly. Trying workaround..." ) end
+					if ( IsValid( hands_ent ) ) then
+						hands_ent:SetModel( mdlhands.model )
+						hands_ent:SetSkin( mdlhands.skin )
+						hands_ent:SetBodyGroups( mdlhands.body )
+						if debugmode then
+							timer.Simple( 0.2, function()
+								if hands_ent:GetModel() != mdlhands.model then
+									print( "LF_PMS: Workaround failed. Unable to setup viewmodel hands. Please check for incompatible addons." )
+								else
+									print( "LF_PMS: Workaround successful. Hands set to: "..mdlhands.model )
+								end
+							end )
+						end
+					end
+				else
+					if debugmode then print( "LF_PMS: SetupHands successful. Hands set to: "..tostring( mdlhands.model ) ) end
 				end
-				-- Attach them to the viewmodel
-				local vm = ply:GetViewModel( 0 )
-				hands:AttachToViewmodel( vm )
-				vm:DeleteOnRemove( hands )
-				ply:DeleteOnRemove( hands )
-				hands:Spawn()
+			else
+				if debugmode then print( "LF_PMS: ERROR - SetupHands failed. player_manager.TranslatePlayerHands didn't return valid data. Please check for incompatible addons." ) end
 			end
 		end )
 		
-		if legs_installed then
+		if addon_legs then
 			ply:ConCommand( "cl_refreshlegs" )
 		end
 		
@@ -159,18 +251,21 @@ net.Receive("lf_playermodel_update", function( len, ply )
 		if game.SinglePlayer() or ply:IsAdmin() then
 			UpdatePlayerModel( ply )
 		else
-			local limit = math.Clamp( GetConVar( "sv_playermodel_selector_limit"):GetInt(), 0, 60 )
+			local limit = math.Clamp( GetConVar( "sv_playermodel_selector_limit"):GetInt(), 0, 900 )
 			local ct = CurTime()
-			local last = ply.lf_playermodel_lastcall or 0
-			local diff = ct - last
-			if diff < 0.05 then
-				ply:Kick("Too many requests. Please check your script for infinite loops")
-			elseif diff >= limit then
+			local diff1 = ct - ( ply.lf_playermodel_lastcall or limit*(-1) )
+			local diff2 = ct - ( ply.lf_playermodel_lastsuccess or limit*(-1) )
+			if diff1 < 0.1 then
+				ply:Kick( "Too many requests. Please check your script for infinite loops" )
+				if debugmode then print ( "LF_PMS: Kicked "..tostring( ply:GetName() )..". Multiple calls for playermodel change in less than: "..tostring( diff1 ).." seconds" ) end
+			elseif diff2 >= limit then
 				ply.lf_playermodel_lastcall = ct
+				ply.lf_playermodel_lastsuccess = ct
 				UpdatePlayerModel( ply )
 			else
 				ply.lf_playermodel_lastcall = ct
-				ply:ChatPrint( "Enhanced PlayerModel Selector: Too many requests." )
+				ply:ChatPrint( "Enhanced PlayerModel Selector: Too many requests. Please wait another "..tostring( limit - math.floor( diff2 ) ).." seconds before trying again." )
+				if debugmode then print ( "LF_PMS: Prevented "..tostring( ply:GetName() ).." from changing playermodel. Last try: "..tostring( math.floor( diff1 ) ).." seconds ago." ) end
 			end
 		end
 	end
@@ -178,22 +273,29 @@ end )
 
 hook.Add( "PlayerSpawn", "lf_playermodel_force_hook1", function( ply )
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
-		UpdatePlayerModel( ply )
+		--UpdatePlayerModel( ply )
+		ply.lf_playermodel_spawned = nil
 	end
 end )
 
-hook.Add( "PlayerSetModel", "lf_playermodel_force_hook2", function( ply )
+--[[hook.Add( "PlayerSetModel", "lf_playermodel_force_hook2", function( ply )
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
 		return false
 	end
-end )
+end )]]
 
 local function ToggleForce()
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() then
 		plymeta.SetModel = function( ply, mdl )
 			if Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
+				if !ply.lf_playermodel_spawned then
+					if debugmode then print( "LF_PMS: Detected initial call for SetModel on: "..tostring( ply:GetName() ) ) end
+					UpdatePlayerModel( ply )
+				else
+					if debugmode then print( "LF_PMS: Enforcer prevented "..tostring( ply:GetName() ).."'s model from being changed to: "..tostring( mdl ) ) end
+				end
 			else
-				ply:LF_SetModel( mdl )
+				SetMDL( ply, mdl )
 			end
 		end
 	else
@@ -201,7 +303,6 @@ local function ToggleForce()
 	end
 end
 cvars.AddChangeCallback( "sv_playermodel_selector_force", ToggleForce )
-plymeta.LF_SetModel = plymeta.LF_SetModel or FindMetaTable("Entity").SetModel
 ToggleForce()
 
 
@@ -212,13 +313,24 @@ end
 if CLIENT then
 
 
+local Version = "3.0"
 local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist" }
 local Favorites = { }
+local addon_vox = false
 
-if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then
-	local loaded = util.JSONToTable( file.Read( "playermodel_selector_favorites.txt", "DATA" ) )
+if !file.Exists( "lf_playermodel_selector", "DATA" ) then file.CreateDir( "lf_playermodel_selector" ) end
+if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then -- Migrate from old version
+	if !file.Exists( "lf_playermodel_selector/cl_favorites.txt", "DATA" ) then
+		local content = file.Read( "playermodel_selector_favorites.txt", "DATA" )
+		file.Write( "lf_playermodel_selector/cl_favorites.txt", content )
+	end
+	-- file.Delete( "playermodel_selector_favorites.txt" ) -- Not yet, in case the client plays on servers with old version
+end
+
+if file.Exists( "lf_playermodel_selector/cl_favorites.txt", "DATA" ) then
+	local loaded = util.JSONToTable( file.Read( "lf_playermodel_selector/cl_favorites.txt", "DATA" ) )
 	if istable( loaded ) then
 		for k, v in pairs( loaded ) do
 			Favorites[tostring(k)] = v
@@ -231,12 +343,12 @@ end
 CreateClientConVar( "cl_playermodel_selector_force", "1", true, true )
 CreateClientConVar( "cl_playermodel_selector_unlockflexes", "0", false, true )
 CreateClientConVar( "cl_playermodel_selector_bgcolor_custom", "1", true, true )
+CreateClientConVar( "cl_playermodel_selector_bgcolor_trans", "1", true, true )
 
-net.Receive("lf_playermodel_cvar_sync", function()
-	local tbl = net.ReadTable()
-	for k, v in pairs( tbl ) do
-		CreateConVar( k, v, { FCVAR_REPLICATED } )
-	end
+net.Start("lf_playermodel_client_sync")
+net.SendToServer()
+net.Receive("lf_playermodel_client_sync", function()
+	addon_vox = net.ReadBool()
 end )
 
 hook.Add( "PostGamemodeLoaded", "lf_playermodel_sboxcvars", function()
@@ -289,7 +401,7 @@ function Menu.Setup()
 	Frame = vgui.Create( "DFrame" )
 	local fw, fh = 960, 700
 	Frame:SetSize( fw, fh )
-	Frame:SetTitle( "Enhanced PlayerModel Selector - by LibertyForce" )
+	Frame:SetTitle( "Enhanced PlayerModel Selector "..Version.." - by LibertyForce" )
 	Frame:SetVisible( true )
 	Frame:SetDraggable( true )
 	Frame:SetScreenLock( false )
@@ -309,8 +421,9 @@ function Menu.Setup()
 			timer.Simple( 0.1, function() RunConsoleCommand( "cl_playercolor", "0.24 0.34 0.41" ) end )
 		end
 	end
+	local a = GetConVar( "cl_playermodel_selector_bgcolor_trans" ):GetBool() == true and 127 or 255
 	Frame.Paint = function( self, w, h )
-		draw.RoundedBox( 10, 0, 0, w, h, Color( r, g, b, 127 ) ) return true
+		draw.RoundedBox( 10, 0, 0, w, h, Color( r, g, b, a ) ) return true
 	end
 	
 	Frame.lblTitle:SetTextColor( Color( 0, 0, 0, 255 ) )
@@ -318,68 +431,92 @@ function Menu.Setup()
 		draw.SimpleTextOutlined( Frame.lblTitle:GetText(), "DermaDefaultBold", 1, 2, Color( 255, 255, 255, 255), 0, 0, 1, Color( 0, 0, 0, 255) ) return true
 	end
 	
-	Frame.btnMinim:SetVisible( false )
-	Frame.btnMaxim.Paint = function( panel, w, h ) derma.SkinHook( "Paint", "WindowMinimizeButton", panel, w, h ) end
-	Frame.btnMaxim:SetEnabled( true )
-	Frame.btnMaxim.DoClick = function()
+	Frame.btnMinim:SetEnabled( true )
+	Frame.btnMinim.DoClick = function()
 		Frame:SetVisible( false )
+	end
+	--Frame.btnMaxim.Paint = function( panel, w, h ) derma.SkinHook( "Paint", "WindowMinimizeButton", panel, w, h ) end
+	local maxi_allowed = false
+	local maxi_mode = 0
+	if ScrW() > fw and ScrH() > fh then maxi_allowed = true end
+	Frame.btnMaxim:SetEnabled( maxi_allowed )
+	Frame.btnMaxim.DoClick = function()
+		if maxi_allowed and maxi_mode == 0 then
+			Frame:SetSize( ScrW(), ScrH() )
+			Frame:Center()
+			Frame:SetDraggable( false )
+			Menu.ApplyButton:SetPos( ScrW() - 560, 30 )
+			Menu.ResetButton:SetPos( 5, ScrH() - 25 )
+			Menu.AdvButton:SetPos( ScrW() - 200, 3 )
+			maxi_mode = 1
+		elseif maxi_allowed and maxi_mode == 1 then
+			Menu.ApplyButton:SetVisible( false )
+			Menu.ResetButton:SetVisible( false )
+			Menu.AdvButton:SetVisible( false )
+			Menu.Right:SetVisible( false )
+			Frame:InvalidateLayout( false )
+			maxi_mode = 2
+		else
+			Frame:SetSize( fw, fh )
+			Frame:Center()
+			Frame:SetDraggable( true )
+			Menu.ApplyButton:SetPos( fw - 560, 30 )
+			Menu.ApplyButton:SetVisible( true )
+			Menu.ResetButton:SetPos( 5, fh - 25 )
+			Menu.ResetButton:SetVisible( true )
+			Menu.AdvButton:SetPos( fw - 200, 3 )
+			Menu.AdvButton:SetVisible( true )
+			Menu.Right:SetVisible( true )
+			maxi_mode = 0
+		end
 	end
 
 	local mdl = Frame:Add( "DModelPanel" )
-	mdl:Dock( LEFT )
-	mdl:SetSize( 520, 0 )
+	mdl:Dock( FILL )
+	--mdl:SetSize( 520, 0 )
 	mdl:SetFOV( 36 )
 	mdl:SetCamPos( Vector( 0, 0, 0 ) )
 	mdl:SetDirectionalLight( BOX_RIGHT, Color( 255, 160, 80, 255 ) )
 	mdl:SetDirectionalLight( BOX_LEFT, Color( 80, 160, 255, 255 ) )
 	mdl:SetAmbientLight( Vector( -64, -64, -64 ) )
 	mdl:SetAnimated( true )
-	mdl.Angles = Angle( 0, 0, 0 )
 	mdl:SetLookAt( Vector( -100, 0, -22 ) )
+	function mdl.DefaultPos()
+		mdl.Angles = Angle( 0, 0, 0 )
+		mdl.Pos = Vector( -100, 0, -61 )
+	end
+	mdl.DefaultPos()
 
-	local b = Frame:Add( "DButton" )
-	b:SetSize( 100, 18 )
-	b:SetPos( 790, 3 )
-	b:SetText( "Visit Addon Page" )
-	b.DoClick = function()
+	Menu.AdvButton = Frame:Add( "DButton" )
+	Menu.AdvButton:SetSize( 100, 18 )
+	Menu.AdvButton:SetPos( fw - 200, 3 )
+	Menu.AdvButton:SetText( "Visit Addon Page" )
+	Menu.AdvButton.DoClick = function()
 		gui.OpenURL( "http://steamcommunity.com/sharedfiles/filedetails/?id=504945881" )
+		SetClipboardText( "http://steamcommunity.com/sharedfiles/filedetails/?id=504945881" )
 	end
 	
-	local b = Frame:Add( "DButton" )
-	b:SetSize( 120, 30 )
-	b:SetPos( 400, 30 )
-	b:SetText( "Apply playermodel" )
-	b:SetEnabled( LocalPlayer():IsAdmin() or GetConVar( "sv_playermodel_selector_instantly" ):GetBool() )
-	b.DoClick = LoadPlayerModel
+	Menu.ApplyButton = Frame:Add( "DButton" )
+	Menu.ApplyButton:SetSize( 120, 30 )
+	Menu.ApplyButton:SetPos( fw - 560, 30 )
+	Menu.ApplyButton:SetText( "Apply playermodel" )
+	Menu.ApplyButton:SetEnabled( LocalPlayer():IsAdmin() or GetConVar( "sv_playermodel_selector_instantly" ):GetBool() )
+	Menu.ApplyButton.DoClick = LoadPlayerModel
 	
-	--[[local topmenu = Frame:Add( "DPanel" )
-	topmenu:SetPaintBackground( false )
-	topmenu:Dock( TOP )
-	topmenu:SetSize( 0, 40 )
-	
-	
-	local c = topmenu:Add( "DCheckBoxLabel" )
-	c.cvar = "cl_playermodel_selector_force"
-	c:SetPos( 250, 8 )
-	c:SetValue( GetConVar(c.cvar):GetBool() )
-	c:SetText( "Enforce your playermodel" )
-	c:SetTooltip( "If enabled, your selected playermodel will\nbe protected. No other function will be\nable to change your playermodel anymore." )
-	c:SizeToContents()
-	c.Label.Paint = function ( self, w, h )
-		draw.SimpleTextOutlined( c.Label:GetText(), "DermaDefault", 0, 0, Color( 255, 255, 255, 255), 0, 0, 1, Color( 0, 0, 0, 255) ) return true
-	end
-	c.OnChange = function( p, v )
-		RunConsoleCommand( c.cvar, v == true and "1" or "0" )
-	end]]
+	Menu.ResetButton = Frame:Add( "DButton" )
+	Menu.ResetButton:SetSize( 40, 20 )
+	Menu.ResetButton:SetPos( 5, fh - 25 )
+	Menu.ResetButton:SetText( "Reset" )
+	Menu.ResetButton.DoClick = mdl.DefaultPos
 	
 	
-	local sheet = Frame:Add( "DPropertySheet" )
-	sheet:Dock( RIGHT )
-	sheet:SetSize( 430, 0 )
+	Menu.Right = Frame:Add( "DPropertySheet" )
+	Menu.Right:Dock( RIGHT )
+	Menu.Right:SetSize( 430, 0 )
 		
 		
-		local modeltab = sheet:Add( "DPropertySheet" )
-		sheet:AddSheet( "Model", modeltab, "icon16/user.png" )
+		local modeltab = Menu.Right:Add( "DPropertySheet" )
+		Menu.Right:AddSheet( "Model", modeltab, "icon16/user.png" )
 		
 			local ModelScroll = modeltab:Add( "DScrollPanel" )
 			modeltab:AddSheet( "Icons", ModelScroll, "icon16/application_view_tile.png" )
@@ -431,37 +568,9 @@ function Menu.Setup()
 			end
 		
 		
-		--[[local PanelSelect = sheet:Add( "DPanelSelect" )
-		sheet:AddSheet( "Model", PanelSelect, "icon16/user.png" )
-
-		for name, model in SortedPairs( player_manager.AllValidModels() ) do
-
-			local icon = vgui.Create( "SpawnIcon" )
-			icon:SetModel( model )
-			icon:SetSize( 64, 64 )
-			icon:SetTooltip( name )
-			icon.playermodel = name
-
-			PanelSelect:AddPanel( icon, { cl_playermodel = name } )
-
-		end]]
-		
-		
-		local favorites = sheet:Add( "DPanel" )
-		sheet:AddSheet( "Favorites", favorites, "icon16/star.png" )
+		local favorites = Menu.Right:Add( "DPanel" )
+		Menu.Right:AddSheet( "Favorites", favorites, "icon16/star.png" )
 		favorites:DockPadding( 8, 8, 8, 8 )
-		
-		local t = favorites:Add( "DLabel" )
-		t:Dock( TOP )
-		t:SetSize( 0, 65 )
-		t:SetText( "Here you can save your favorite playermodel combinations. To do this:\n1. Select a model in the Model tab.\n2. Setup the skin and bodygroups as you wish.\n3. Enter a unique name into the textfield and click Add new favorite." )
-		t:SetDark( true )
-		t:SetWrap( true )
-		
-		local control = favorites:Add( "DPanel" )
-		control:Dock( TOP )
-		control:SetSize( 0, 70 )
-		control:SetPaintBackground( false )
 		
 		local FavList = favorites:Add( "DListView" )
 		FavList:Dock( FILL )
@@ -470,6 +579,17 @@ function Menu.Setup()
 		FavList:AddColumn( "Model" )
 		FavList:AddColumn( "Skin" ):SetFixedWidth( 25 )
 		FavList:AddColumn( "Bodygroups" )
+		FavList.DoDoubleClick = function( id, sel )
+			local name = tostring( FavList:GetLine( sel ):GetValue( 1 ) )
+			if istable( Favorites[name] ) then
+				RunConsoleCommand( "cl_playermodel", Favorites[name].model )
+				RunConsoleCommand( "cl_playerbodygroups", Favorites[name].bodygroups )
+				RunConsoleCommand( "cl_playerskin", Favorites[name].skin )
+				timer.Simple( 0.1, function()
+					Menu.UpdateFromConvars()
+				end )
+			end
+		end
 		
 		function Menu.FavPopulate()
 			FavList:Clear()
@@ -480,21 +600,53 @@ function Menu.Setup()
 		end
 		Menu.FavPopulate()
 		
+		local b = favorites:Add( "DButton" )
+		b:Dock( TOP )
+		b:SetHeight( 25 )
+		b:DockMargin( 0, 0, 200, 10 )
+		b:SetText( "Load selected Favorite" )
+		b.DoClick = function()
+			local sel = FavList:GetSelected()
+			if !sel[1] then return end
+			local name = tostring( sel[1]:GetValue(1) )
+			if istable( Favorites[name] ) then
+				RunConsoleCommand( "cl_playermodel", Favorites[name].model )
+				RunConsoleCommand( "cl_playerbodygroups", Favorites[name].bodygroups )
+				RunConsoleCommand( "cl_playerskin", Favorites[name].skin )
+				timer.Simple( 0.1, function()
+					Menu.UpdateFromConvars()
+				end )
+			end
+		end
+		
+		local t = favorites:Add( "DLabel" )
+		t:Dock( BOTTOM )
+		t:SetAutoStretchVertical( true )
+		t:SetText( "Here you can save your favorite playermodel combinations. To do this:\n1. Select a model and setup the skin and bodygroups as you wish.\n2. Enter a unique name into the textfield and click \"Add new favorite\".\n3. Load your favorite by selecting it in the list below and clicking \"Load selected\".\nYou can also apply existing favorites by console command:\nplayermodel_loadfav \"the favorite's name\"" )
+		t:SetDark( true )
+		t:SetWrap( true )
+		
+		local control = favorites:Add( "DPanel" )
+		control:Dock( BOTTOM )
+		control:DockMargin( 0, 10, 0, 0 )
+		control:SetSize( 0, 60 )
+		control:SetPaintBackground( false )
+		
 		function Menu.FavAdd( name )
 			Favorites[name] = { }
 			Favorites[name].model = LocalPlayer():GetInfo( "cl_playermodel" )
 			Favorites[name].skin = LocalPlayer():GetInfoNum( "cl_playerskin", 0 )
 			Favorites[name].bodygroups = LocalPlayer():GetInfo( "cl_playerbodygroups" )
-			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites, true ) )
+			file.Write( "lf_playermodel_selector/cl_favorites.txt", util.TableToJSON( Favorites, true ) )
 			Menu.FavPopulate()
 		end
 		
 		local FavEntry = control:Add( "DTextEntry" )
 		FavEntry:SetPos( 0, 0 )
-		FavEntry:SetSize( 260, 20 )
+		FavEntry:SetSize( 395, 20 )
 		
 		local b = control:Add( "DButton" )
-		b:SetPos( 270, 0 )
+		b:SetPos( 0, 30 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Add new favorite" )
 		b.DoClick = function()
@@ -524,31 +676,13 @@ function Menu.Setup()
 				local name = tostring( v:GetValue(1) )
 				Favorites[name] = nil
 			end
-			file.Write( "playermodel_selector_favorites.txt", util.TableToJSON( Favorites, true ) )
+			file.Write( "lf_playermodel_selector/cl_favorites.txt", util.TableToJSON( Favorites, true ) )
 			Menu.FavPopulate()
 		end
 		
-		local b = control:Add( "DButton" )
-		b:SetPos( 0, 30 )
-		b:SetSize( 125, 20 )
-		b:SetText( "Load selected" )
-		b.DoClick = function()
-			local sel = FavList:GetSelected()
-			if !sel[1] then return end
-			local name = tostring( sel[1]:GetValue(1) )
-			if istable( Favorites[name] ) then
-				RunConsoleCommand( "cl_playermodel", Favorites[name].model )
-				RunConsoleCommand( "cl_playerbodygroups", Favorites[name].bodygroups )
-				RunConsoleCommand( "cl_playerskin", Favorites[name].skin )
-				timer.Simple( 0.1, function()
-					Menu.UpdateFromConvars()
-				end )
-			end
-		end
 		
-		
-		local bdcontrols = sheet:Add( "DPanel" )
-		local bgtab = sheet:AddSheet( "Bodygroups", bdcontrols, "icon16/group.png" )
+		local bdcontrols = Menu.Right:Add( "DPanel" )
+		local bgtab = Menu.Right:AddSheet( "Bodygroups", bdcontrols, "icon16/group.png" )
 		bdcontrols:DockPadding( 8, 8, 8, 8 )
 
 		local bdcontrolspanel = bdcontrols:Add( "DPanelList" )
@@ -556,8 +690,8 @@ function Menu.Setup()
 		bdcontrolspanel:Dock( FILL )
 		
 		
-		local flexcontrols = sheet:Add( "DPanel" )
-		local flextab = sheet:AddSheet( "Flexes", flexcontrols, "icon16/emoticon_wink.png" )
+		local flexcontrols = Menu.Right:Add( "DPanel" )
+		local flextab = Menu.Right:AddSheet( "Flexes", flexcontrols, "icon16/emoticon_wink.png" )
 		flexcontrols:DockPadding( 8, 8, 8, 8 )
 		
 		local flexcontrolspanel = flexcontrols:Add( "DPanelList" )
@@ -565,8 +699,8 @@ function Menu.Setup()
 		flexcontrolspanel:Dock( FILL )
 		
 		
-		local controls = sheet:Add( "DPanel" )
-		sheet:AddSheet( "Colors", controls, "icon16/color_wheel.png" )
+		local controls = Menu.Right:Add( "DPanel" )
+		Menu.Right:AddSheet( "Colors", controls, "icon16/color_wheel.png" )
 		controls:DockPadding( 8, 8, 8, 8 )
 
 		local lbl = controls:Add( "DLabel" )
@@ -595,7 +729,7 @@ function Menu.Setup()
 		
 		local b = controls:Add( "DButton" )
 		b:DockMargin( 0, 8, 0, 0 )
-		b:Dock( LEFT )
+		b:Dock( TOP )
 		b:SetSize( 150, 20 )
 		b:SetText( "Reset to default values" )
 		b.DoClick = function()
@@ -606,8 +740,8 @@ function Menu.Setup()
 		end
 		
 		
-		local moretab = sheet:Add( "DPropertySheet" )
-		sheet:AddSheet( "Settings", moretab, "icon16/information.png" )
+		local moretab = Menu.Right:Add( "DPropertySheet" )
+		Menu.Right:AddSheet( "Settings", moretab, "icon16/key.png" )
 			
 			
 			local panel = moretab:Add( "DPanel" )
@@ -650,6 +784,26 @@ function Menu.Setup()
 			t:DockMargin( 0, 0, 0, 20 )
 			t:SetAutoStretchVertical( true )
 			t:SetText( "If enabled, your selected player color will be used as the menu background. If disabled, the background will be grey." )
+			t:SetDark( true )
+			t:SetWrap( true )
+			
+			local c = panel:Add( "DCheckBoxLabel" )
+			c.cvar = "cl_playermodel_selector_bgcolor_trans"
+			c:Dock( TOP )
+			c:DockMargin( 0, 0, 0, 5 )
+			c:SetValue( GetConVar(c.cvar):GetBool() )
+			c:SetText( "Transparent background" )
+			c:SetDark( true )
+			c:SizeToContents()
+			c.OnChange = function( p, v )
+				RunConsoleCommand( c.cvar, v == true and "1" or "0" )
+			end
+			
+			local t = panel:Add( "DLabel" )
+			t:Dock( TOP )
+			t:DockMargin( 0, 0, 0, 20 )
+			t:SetAutoStretchVertical( true )
+			t:SetText( "If enabled, the menu backgroup will be transparent. If disabled, the background will be opaque." )
 			t:SetDark( true )
 			t:SetWrap( true )
 			
@@ -781,7 +935,7 @@ function Menu.Setup()
 				s:SetText( "Request limit" )
 				s:SetDark( true )
 				s:SetDecimals( 0 )
-				s:SetMax( 60 )
+				s:SetMax( 900 )
 				s:SetValue( GetConVar( "sv_playermodel_selector_limit" ):GetInt() )
 				s.OnValueChanged = function( val )
 					net.Start("lf_playermodel_cvar_change")
@@ -800,7 +954,7 @@ function Menu.Setup()
 				
 				
 				local panel = moretab:Add( "DPanel" )
-				moretab:AddSheet( "Gamemode Blacklist", panel )
+				moretab:AddSheet( "GM Blacklist", panel, "icon16/delete.png" )
 				panel:DockPadding( 10, 10, 10, 10 )
 				
 				local Blacklist = panel:Add( "DListView" )
@@ -883,8 +1037,184 @@ function Menu.Setup()
 					net.WriteTable( tbl )
 					net.SendToServer()
 				end
+				
+				
+				if addon_vox then
+					
+					local panel = moretab:Add( "DPanel" )
+					moretab:AddSheet( "VOX", panel, "icon16/sound.png" )
+					panel:DockPadding( 10, 10, 10, 10 )
+					
+					local VOXlist = panel:Add( "DListView" )
+					VOXlist:Dock( TOP )
+					VOXlist:DockMargin( 0, 0, 0, 15 )
+					VOXlist:SetHeight( 260 )
+					VOXlist:SetMultiSelect( true )
+					VOXlist:AddColumn( "PlayerModel" )
+					VOXlist:AddColumn( "assigned VOX pack" )
+					
+					net.Receive("lf_playermodel_voxlist", function()
+						local tbl = net.ReadTable()
+						VOXlist:Clear()
+						for k, v in pairs( tbl ) do
+							VOXlist:AddLine( k, v )
+							VOXlist:SortByColumn( 1 )
+						end
+					end )
+					
+					function Menu.VOXlistPopulate()
+						net.Start( "lf_playermodel_voxlist" )
+						net.WriteInt( 0, 3 )
+						net.SendToServer()
+					end
+					Menu.VOXlistPopulate()
+					
+					local control = panel:Add( "DPanel" )
+					control:Dock( TOP )
+					control:DockMargin( 0, 0, 0, 0 )
+					--control:SetSize( 0, 60 )
+					control:SetPaintBackground( false )
+					
+					local VOXinstalled = panel:Add( "DListView" )
+					VOXinstalled:Dock( TOP )
+					VOXinstalled:DockMargin( 0, 15, 0, 0 )
+					VOXinstalled:SetHeight( 260 )
+					VOXinstalled:SetMultiSelect( false )
+					VOXinstalled:AddColumn( "Available VOX packs" )
+					
+					if istable( TFAVOX_Models ) then
+						for k, v in pairs( TFAVOX_Models ) do
+							VOXinstalled:AddLine( k )
+							VOXinstalled:SortByColumn( 1 )
+						end
+					end
+					
+					local b = control:Add( "DButton" )
+					b:Dock( LEFT )
+					--b:DockPadding( 100, 0, 100, 0 )
+					b:SetWidth( 200 )
+					b:SetText( "Assign VOX pack to current PlayerModel" )
+					b.DoClick = function()
+						local sel = VOXinstalled:GetSelected()
+						if !sel[1] then return end
+						local v = tostring( sel[1]:GetValue(1) )
+						local k = string.lower( player_manager.TranslatePlayerModel( LocalPlayer():GetInfo( "cl_playermodel" ) ) )
+						net.Start( "lf_playermodel_voxlist" )
+						net.WriteInt( 1, 3 )
+						net.WriteString( k )
+						net.WriteString( v )
+						net.SendToServer()
+					end
+					
+					local b = control:Add( "DButton" )
+					b:Dock( RIGHT )
+					--b:DockPadding( 100, 0, 100, 0 )
+					b:SetWidth( 170 )
+					b:SetText( "Remove selected assignment" )
+					b.DoClick = function()
+						local tbl = { }
+						local sel = VOXlist:GetSelected()
+						for k, v in pairs( sel ) do
+							local name = tostring( v:GetValue(1) )
+							table.insert( tbl, name )
+						end
+						net.Start( "lf_playermodel_voxlist" )
+						net.WriteInt( 2, 3 )
+						net.WriteTable( tbl )
+						net.SendToServer()
+					end
+					
+				end
 			
 			end
+			
+			
+			local panel = moretab:Add( "DPanel" )
+			moretab:AddSheet( "Info", panel, "icon16/information.png" )
+			panel:DockPadding( 0, 0, 0, 0 )
+			
+			local t = panel:Add( "DHTML" )
+			t:Dock( FILL )
+			--t:DockMargin( 0, 0, 0, 15 )
+			--t:SetHeight( 260 )
+			t:SetAllowLua( true )
+			t:AddFunction( "url", "open", function( str ) gui.OpenURL( str ) end )
+			t:AddFunction( "url", "copy", function( str ) SetClipboardText( str ) end )
+			
+			local intro = [[Created by <a href="javascript:url.open( 'http://steamcommunity.com/id/libertyforce' )" oncontextmenu="url.copy( 'http://steamcommunity.com/id/libertyforce' )">LibertyForce</a>.<br>Thank you for installing this addon! Enjoying it?<br>
+			<a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=504945881' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=504945881' )">Please leave a LIKE on the workshop page.</a>]]
+			if !game.SinglePlayer() and !LocalPlayer():IsSuperAdmin() then
+				intro = [[This server is running Enhanced PlayerModel Selector by <a href="javascript:url.open( 'http://steamcommunity.com/id/libertyforce' )" oncontextmenu="url.copy( 'http://steamcommunity.com/id/libertyforce' )">LibertyForce</a>. Enjoying it?<br>
+				<a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=504945881' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=504945881' )">Click here to download this addon for SinglePlayer.</a>]]
+			end
+			
+			t:SetHTML( [[
+				<html>
+					<head>
+						<style type="text/css">
+							body {
+								background-color: #1b2838;
+								font-family: Arial, Helvetica, Verdana, sans-serif;
+								font-size: 14px;
+								color: #acb2b8;
+							}
+							h1, h2, h3 {
+								font-size: 15px;
+								color: #5aa9d6;
+								font-weight: bold;
+							}
+							h1 {
+								font-size: 20px;
+							}
+							a {
+								text-decoration: none;
+								color: #ffffff;
+							}
+							a:hover {
+								color:#66C0F4;
+							}
+							table {
+								border: 1px solid #4d4d4d;
+								border-spacing: 0px;
+								padding: 4px;
+							}
+							table th {
+								border: 1px solid #4d4d4d;
+								padding: 4px;
+								margin: 0px;
+							}
+							table td {
+								border: 1px solid #4d4d4d;
+								padding: 4px;
+								margin: 0px;
+							}
+						</style>
+					</head>
+					<body>
+						<h1>Enhanced Playermodel Selector ]]..Version..[[</h1> 
+						<p>]]..intro..[[</p>
+						<h2>Compatible Addons</h1>
+						<p>Enhanced Playermodel Selector provides additional functionality with those addons installed:
+						<ul>
+							<li><a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=112806637' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=112806637' )">Gmod Legs 3</a></li>
+							<li><a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=742906087' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=742906087' )">TFA-VOX || Player Callouts Redefined</a></li>
+						</ul></p>
+						<h2>More addons</h2>
+						<p><ul>
+							<li><a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=624173012' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=624173012' )">Simple Addon Manager</a><br>
+							<small>Tired of the slow and annoying addon manager included in Gmod? Here comes and easy to use and efficient alternative that allows you to handle even large addon collections.<br>
+							+ Toggle multiple addons at once<br>+ Add tags to your addons<br>+ Cleanup your addons by uninstalling them at once</small><br>&nbsp;</li>
+							<li><a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=492765756' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=492765756' )">Weapon: Setup, Transfer And Restore</a><br>
+							<small>This addon provides an easy way to restore all your weapons and ammo after you die, without having to spawn them again.</small><br>&nbsp;</li>
+							<li><a href="javascript:url.open( 'http://steamcommunity.com/sharedfiles/filedetails/?id=351603470' )" oncontextmenu="url.copy( 'http://steamcommunity.com/sharedfiles/filedetails/?id=351603470' )">Anti-FriendlyFire (NPC)</a><br>
+							<small>If you where ever annoyed by your allies killing each other in friendly fire, which made large NPC battle pretty much useless, then you have just found the solution! This mod allows you to turn off Friendly Fire towards and between NPCs.</small></li>
+						</ul></p>
+						<h2 style="font-size: 10px">Left click: Open in Steam Overlay.<br>Right click: Copy URL to clipboard for use in browser.</h2>
+					</body>
+				</html>
+			]] )
+			
+
 
 
 	-- Helper functions
@@ -1063,23 +1393,16 @@ function Menu.Setup()
 
 	Menu.UpdateFromConvars()
 
-	--[[function PanelSelect:OnActivePanelChanged( old, new )
-
-		if ( old != new ) then -- Only reset if we changed the model
-			RunConsoleCommand( "cl_playerbodygroups", "0" )
-			RunConsoleCommand( "cl_playerskin", "0" )
-			RunConsoleCommand( "cl_playerflexes", "0" )
-		end
-
-		timer.Simple( 0.1, function() Menu.UpdateFromConvars() end )
-
-	end]]
-
 	-- Hold to rotate
 
-	function mdl:DragMousePress()
+	function mdl:DragMousePress( button )
 		self.PressX, self.PressY = gui.MousePos()
-		self.Pressed = true
+		self.Pressed = button
+	end
+	
+	function mdl:OnMouseWheeled( delta )
+		self.WheelD = delta * -10
+		self.Wheeled = true
 	end
 
 	function mdl:DragMouseRelease() self.Pressed = false end
@@ -1087,14 +1410,34 @@ function Menu.Setup()
 	function mdl:LayoutEntity( Entity )
 		if ( self.bAnimated ) then self:RunAnimation() end
 
-		if ( self.Pressed ) then
+		if ( self.Pressed == MOUSE_LEFT ) then
 			local mx, my = gui.MousePos()
 			self.Angles = self.Angles - Angle( 0, ( self.PressX or mx ) - mx, 0 )
 			
 			self.PressX, self.PressY = gui.MousePos()
 		end
+		
+		if ( self.Pressed == MOUSE_RIGHT ) then
+			local mx, my = gui.MousePos()
+			self.Angles = self.Angles - Angle( ( self.PressY*(0.5) or my*(0.5) ) - my*(0.5), 0, ( self.PressX*(-0.5) or mx*(-0.5) ) - mx*(-0.5) )
+			
+			self.PressX, self.PressY = gui.MousePos()
+		end
+		
+		if ( self.Pressed == MOUSE_MIDDLE ) then
+			local mx, my = gui.MousePos()
+			self.Pos = self.Pos - Vector( 0, ( self.PressX*(0.5) or mx*(0.5) ) - mx*(0.5), ( self.PressY*(-0.5) or my*(-0.5) ) - my*(-0.5) )
+			
+			self.PressX, self.PressY = gui.MousePos()
+		end
+		
+		if ( self.Wheeled ) then
+			self.Wheeled = false
+			self.Pos = self.Pos - Vector( self.WheelD, 0, 0 )
+		end
 
 		Entity:SetAngles( self.Angles )
+		Entity:SetPos( self.Pos )
 	end
 
 end
@@ -1156,13 +1499,10 @@ list.Set( "PlayerOptionsAnimations", "css_swat", { "pose_standing_02", "idle_fis
 list.Set( "PlayerOptionsAnimations", "css_urban", { "pose_standing_02", "idle_fist" } )
 
 local bonus = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist", "pose_standing_01", "pose_standing_04", "swim_idle_all", "idle_all_scared", "idle_magic" }
-list.Set( "PlayerOptionsAnimations", "May", bonus )
-list.Set( "PlayerOptionsAnimations", "Dawn", bonus )
-list.Set( "PlayerOptionsAnimations", "Rosa", bonus )
-list.Set( "PlayerOptionsAnimations", "Hilda", bonus )
-list.Set( "PlayerOptionsAnimations", "Leaf", bonus )
-list.Set( "PlayerOptionsAnimations", "Mami", bonus )
-list.Set( "PlayerOptionsAnimations", "Tda Hatsune Miku (v2)", bonus )
+local fav = { "May", "Dawn", "Rosa", "Hilda", "Leaf", "Mami", "Tda Hatsune Miku (v2)", "YYB Kagamine Rin (v3)", "Misaka Mikoto", "Appearance Miku (Default)", "Appearance Miku (Stroll)" }
+for k, v in pairs( fav ) do
+	list.Set( "PlayerOptionsAnimations", v, bonus )
+end
 
 
 end
