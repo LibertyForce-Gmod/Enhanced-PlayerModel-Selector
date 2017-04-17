@@ -656,18 +656,19 @@ function Menu.Setup()
 		end
 		
 		local b = control:Add( "DButton" )
-		b:SetPos( 270, 30 )
+		b:SetPos( 135, 30 )
 		b:SetSize( 125, 20 )
-		b:SetText( "Overwrite selected" )
+		b:SetText( "Replace selected" )
 		b.DoClick = function()
 			local sel = FavList:GetSelected()
+			if sel[2] then return end
 			if !sel[1] then return end
 			local name = tostring( sel[1]:GetValue(1) )
 			Menu.FavAdd( name )
 		end
 		
 		local b = control:Add( "DButton" )
-		b:SetPos( 135, 30 )
+		b:SetPos( 270, 30 )
 		b:SetSize( 125, 20 )
 		b:SetText( "Delete all selected" )
 		b.DoClick = function()
@@ -1057,7 +1058,7 @@ function Menu.Setup()
 						local tbl = net.ReadTable()
 						VOXlist:Clear()
 						for k, v in pairs( tbl ) do
-							VOXlist:AddLine( k, v )
+							VOXlist:AddLine( string.StripExtension( string.gsub( k, "models/", "", 1 ) ), string.StripExtension( string.gsub( v, "models/", "", 1 ) ) )
 							VOXlist:SortByColumn( 1 )
 						end
 					end )
@@ -1084,7 +1085,7 @@ function Menu.Setup()
 					
 					if istable( TFAVOX_Models ) then
 						for k, v in pairs( TFAVOX_Models ) do
-							VOXinstalled:AddLine( k )
+							VOXinstalled:AddLine( string.StripExtension( string.gsub( k, "models/", "", 1 ) ) )
 							VOXinstalled:SortByColumn( 1 )
 						end
 					end
@@ -1097,7 +1098,7 @@ function Menu.Setup()
 					b.DoClick = function()
 						local sel = VOXinstalled:GetSelected()
 						if !sel[1] then return end
-						local v = tostring( sel[1]:GetValue(1) )
+						local v = "models/"..tostring( sel[1]:GetValue(1)..".mdl" )
 						local k = string.lower( player_manager.TranslatePlayerModel( LocalPlayer():GetInfo( "cl_playermodel" ) ) )
 						net.Start( "lf_playermodel_voxlist" )
 						net.WriteInt( 1, 3 )
@@ -1115,7 +1116,7 @@ function Menu.Setup()
 						local tbl = { }
 						local sel = VOXlist:GetSelected()
 						for k, v in pairs( sel ) do
-							local name = tostring( v:GetValue(1) )
+							local name = "models/"..tostring( v:GetValue(1)..".mdl" )
 							table.insert( tbl, name )
 						end
 						net.Start( "lf_playermodel_voxlist" )
