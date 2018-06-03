@@ -1505,9 +1505,11 @@ concommand.Add( "playermodel_selector", Menu.Toggle )
 } )]]
 
 hook.Add( "Initialize", "lf_playermodel_desktop_hook", function()
-		list.GetForEdit( "DesktopWindows" ).PlayerEditor.init = function( icon, window )
-			window:Remove()
-			RunConsoleCommand( "playermodel_selector" )
+		if GAMEMODE_NAME == "sandbox" then
+			list.GetForEdit( "DesktopWindows" ).PlayerEditor.init = function( icon, window )
+				window:Remove()
+				RunConsoleCommand( "playermodel_selector" )
+			end
 		end
 end )
 
