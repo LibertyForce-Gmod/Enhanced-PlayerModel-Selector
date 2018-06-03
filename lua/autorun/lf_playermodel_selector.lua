@@ -240,7 +240,7 @@ local function UpdatePlayerModel( ply )
 		end )
 		
 		if addon_legs then
-			ply:ConCommand( "cl_refreshlegs" )
+			ply:SetLegsModel( mdlpath )
 		end
 		
 	end
@@ -313,7 +313,7 @@ end
 if CLIENT then
 
 
-local Version = "3.0"
+local Version = "3.1"
 local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist" }
@@ -326,7 +326,7 @@ if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then -- Migrate f
 		local content = file.Read( "playermodel_selector_favorites.txt", "DATA" )
 		file.Write( "lf_playermodel_selector/cl_favorites.txt", content )
 	end
-	-- file.Delete( "playermodel_selector_favorites.txt" ) -- Not yet, in case the client plays on servers with old version
+	file.Delete( "playermodel_selector_favorites.txt" )
 end
 
 if file.Exists( "lf_playermodel_selector/cl_favorites.txt", "DATA" ) then
@@ -399,7 +399,7 @@ concommand.Add( "playermodel_loadfav", LoadFavorite )
 function Menu.Setup()
 
 	Frame = vgui.Create( "DFrame" )
-	local fw, fh = 960, 700
+	local fw, fh = math.min( ScrW() - 16, 960 ), math.min( ScrH() - 16, 700 )
 	Frame:SetSize( fw, fh )
 	Frame:SetTitle( "Enhanced PlayerModel Selector "..Version.." - by LibertyForce" )
 	Frame:SetVisible( true )
@@ -518,6 +518,17 @@ function Menu.Setup()
 		local modeltab = Menu.Right:Add( "DPropertySheet" )
 		Menu.Right:AddSheet( "Model", modeltab, "icon16/user.png" )
 		
+			local t = modeltab:Add( "DLabel" )
+			t:SetPos( 129, 1 )
+			--t:SetSize( 100, 20 )
+			t:SetText( "Search:" )
+			
+			Menu.ModelFilter = modeltab:Add( "DTextEntry" )
+			Menu.ModelFilter:SetPos( 168, 1 )
+			Menu.ModelFilter:SetSize( 246, 20 )
+			Menu.ModelFilter:SetUpdateOnType( true )
+			Menu.ModelFilter.OnValueChange = function() Menu.ModelPopulate() end
+			
 			local ModelScroll = modeltab:Add( "DScrollPanel" )
 			modeltab:AddSheet( "Icons", ModelScroll, "icon16/application_view_tile.png" )
 			ModelScroll:DockMargin( 2, 0, 2, 2 )
@@ -549,23 +560,43 @@ function Menu.Setup()
 				timer.Simple( 0.1, function() Menu.UpdateFromConvars() end )
 			end
 			
+			local AllModels = player_manager.AllValidModels()
 			
-			for name, model in SortedPairs( player_manager.AllValidModels() ) do
-				local icon = ModelIconLayout:Add( "SpawnIcon" )
-				icon:SetSize( 64, 64 )
-				icon:InvalidateLayout( true )
-				icon:SetModel( model )
-				icon:SetTooltip( name )
-				table.insert( modelicons, icon )
-				icon.DoClick = function()
-					RunConsoleCommand( "cl_playermodel", name )
-					RunConsoleCommand( "cl_playerbodygroups", "0" )
-					RunConsoleCommand( "cl_playerskin", "0" )
-					RunConsoleCommand( "cl_playerflexes", "0" )
-					timer.Simple( 0.1, function() Menu.UpdateFromConvars() end )
+			function Menu.ModelPopulate()
+				
+				ModelIconLayout:Clear()
+				ModelList:Clear()
+				
+				local ModelFilter = Menu.ModelFilter:GetValue() or nil
+				
+				for name, model in SortedPairs( AllModels ) do
+					
+					if not ModelFilter or ModelFilter == ""
+					or ModelFilter:lower() == string.match( name:lower(), ModelFilter:lower() ) then
+					
+						local icon = ModelIconLayout:Add( "SpawnIcon" )
+						icon:SetSize( 64, 64 )
+						--icon:InvalidateLayout( true )
+						icon:SetModel( model )
+						icon:SetTooltip( name )
+						table.insert( modelicons, icon )
+						icon.DoClick = function()
+							RunConsoleCommand( "cl_playermodel", name )
+							RunConsoleCommand( "cl_playerbodygroups", "0" )
+							RunConsoleCommand( "cl_playerskin", "0" )
+							RunConsoleCommand( "cl_playerflexes", "0" )
+							timer.Simple( 0.1, function() Menu.UpdateFromConvars() end )
+						end
+						
+						ModelList:AddLine( name, model )
+						
+					end
+					
 				end
-				ModelList:AddLine( name, model )
+				
 			end
+			
+			Menu.ModelPopulate()
 		
 		
 		local favorites = Menu.Right:Add( "DPanel" )
@@ -713,7 +744,7 @@ function Menu.Setup()
 		plycol:SetAlphaBar( false )
 		plycol:SetPalette( false )
 		plycol:Dock( TOP )
-		plycol:SetSize( 200, 270 )
+		plycol:SetSize( 200, ( fh - 160) / 2 )
 
 		local lbl = controls:Add( "DLabel" )
 		lbl:SetText( "Physgun color" )
@@ -725,7 +756,7 @@ function Menu.Setup()
 		wepcol:SetAlphaBar( false )
 		wepcol:SetPalette( false )
 		wepcol:Dock( TOP )
-		wepcol:SetSize( 200, 270 )
+		wepcol:SetSize( 200, ( fh - 160) / 2 )
 		wepcol:SetVector( Vector( GetConVar( "cl_weaponcolor" ):GetString() ) )
 		
 		local b = controls:Add( "DButton" )
@@ -748,6 +779,9 @@ function Menu.Setup()
 			local panel = moretab:Add( "DPanel" )
 			moretab:AddSheet( "Client", panel, "icon16/status_online.png" )
 			panel:DockPadding( 10, 10, 10, 10 )
+			
+			local panel = panel:Add( "DScrollPanel" )
+			panel:Dock( FILL )
 			
 			local c = panel:Add( "DCheckBoxLabel" )
 			c.cvar = "cl_playermodel_selector_force"
@@ -853,6 +887,9 @@ function Menu.Setup()
 				local panel = moretab:Add( "DPanel" )
 				moretab:AddSheet( "Server", panel, "icon16/world.png" )
 				panel:DockPadding( 10, 10, 10, 10 )
+				
+				local panel = panel:Add( "DScrollPanel" )
+				panel:Dock( FILL )
 				
 				local function ChangeCVar( p, v )
 					net.Start("lf_playermodel_cvar_change")
@@ -1048,8 +1085,8 @@ function Menu.Setup()
 					
 					local VOXlist = panel:Add( "DListView" )
 					VOXlist:Dock( TOP )
-					VOXlist:DockMargin( 0, 0, 0, 15 )
-					VOXlist:SetHeight( 260 )
+					VOXlist:DockMargin( 0, 0, 0, 10 )
+					VOXlist:SetHeight( ( fh - 126 - 44 ) / 2 ) -- 260
 					VOXlist:SetMultiSelect( true )
 					VOXlist:AddColumn( "PlayerModel" )
 					VOXlist:AddColumn( "assigned VOX pack" )
@@ -1078,8 +1115,8 @@ function Menu.Setup()
 					
 					local VOXinstalled = panel:Add( "DListView" )
 					VOXinstalled:Dock( TOP )
-					VOXinstalled:DockMargin( 0, 15, 0, 0 )
-					VOXinstalled:SetHeight( 260 )
+					VOXinstalled:DockMargin( 0, 10, 0, 0 )
+					VOXinstalled:SetHeight( ( fh - 126 - 44 ) / 2 )
 					VOXinstalled:SetMultiSelect( false )
 					VOXinstalled:AddColumn( "Available VOX packs" )
 					
@@ -1458,15 +1495,20 @@ end
 
 concommand.Add( "playermodel_selector", Menu.Toggle )
 
+--[[list.Set( "DesktopWindows", "PlayerEditorLF", {
+	title		= "PM Selector",
+	icon		= "icon64/playermodel.png",
+	init		= function( icon, window )
+		window:Remove()
+		RunConsoleCommand( "playermodel_selector" )
+	end
+} )]]
+
 hook.Add( "Initialize", "lf_playermodel_desktop_hook", function()
-		list.Set( "DesktopWindows", "PlayerEditor", {
-			title		= "Player Model",
-			icon		= "icon64/playermodel.png",
-			init		= function( icon, window )
-				window:Remove()
-				RunConsoleCommand( "playermodel_selector" )
-			end
-		} )
+		list.GetForEdit( "DesktopWindows" ).PlayerEditor.init = function( icon, window )
+			window:Remove()
+			RunConsoleCommand( "playermodel_selector" )
+		end
 end )
 
 
@@ -1500,7 +1542,11 @@ list.Set( "PlayerOptionsAnimations", "css_swat", { "pose_standing_02", "idle_fis
 list.Set( "PlayerOptionsAnimations", "css_urban", { "pose_standing_02", "idle_fist" } )
 
 local bonus = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist", "pose_standing_01", "pose_standing_04", "swim_idle_all", "idle_all_scared", "idle_magic" }
-local fav = { "May", "Dawn", "Rosa", "Hilda", "Leaf", "Mami", "Tda Hatsune Miku (v2)", "YYB Kagamine Rin (v3)", "Misaka Mikoto", "Appearance Miku (Default)", "Appearance Miku (Stroll)" }
+local fav = { -- ^_^ --
+	"TFA-May-RS", "TFA-May-ORAS", "May", "Dawn", "Rosa", "Hilda", "Leaf", "Mami",
+	"Misaka Mikoto (Summer)", "Misaka Mikoto (Winter)", "Misaka Imoito (Summer)", "Misaka Imoito (Winter)", "Shirai Kuroko (Summer)", "Shirai Kuroko (Winter)", "Uiharu Kazari", "Saten Ruiko",
+	"Tda Hatsune Miku (v2)", "YYB Kagamine Rin (v3)", "Appearance Miku (Default)", "Appearance Miku (Stroll)", "Appearance Miku (Cupid)", "Appearance Miku (Colorful Drop)", "Kizuna AI"
+}
 for k, v in pairs( fav ) do
 	list.Set( "PlayerOptionsAnimations", v, bonus )
 end
