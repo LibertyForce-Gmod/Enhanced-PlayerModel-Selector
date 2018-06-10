@@ -240,7 +240,7 @@ local function UpdatePlayerModel( ply )
 		end )
 		
 		if addon_legs then
-			ply:SetLegsModel( mdlpath )
+			hook.Run( "SetModel", ply, mdlpath )
 		end
 		
 	end
@@ -278,32 +278,43 @@ hook.Add( "PlayerSpawn", "lf_playermodel_force_hook1", function( ply )
 	end
 end )
 
---[[hook.Add( "PlayerSetModel", "lf_playermodel_force_hook2", function( ply )
+local function ForceSetModel( ply, mdl )
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
-		return false
+		if !ply.lf_playermodel_spawned then
+			if debugmode then print( "LF_PMS: Detected initial call for SetModel on: "..tostring( ply:GetName() ) ) end
+			UpdatePlayerModel( ply )
+		else
+			if debugmode then print( "LF_PMS: Enforcer prevented "..tostring( ply:GetName() ).."'s model from being changed to: "..tostring( mdl ) ) end
+		end
+	else
+		SetMDL( ply, mdl )
+		if addon_legs then hook.Run( "SetModel" , ply, mdl ) end
 	end
-end )]]
+end
 
 local function ToggleForce()
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() then
-		plymeta.SetModel = function( ply, mdl )
-			if Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
-				if !ply.lf_playermodel_spawned then
-					if debugmode then print( "LF_PMS: Detected initial call for SetModel on: "..tostring( ply:GetName() ) ) end
-					UpdatePlayerModel( ply )
-				else
-					if debugmode then print( "LF_PMS: Enforcer prevented "..tostring( ply:GetName() ).."'s model from being changed to: "..tostring( mdl ) ) end
-				end
-			else
-				SetMDL( ply, mdl )
-			end
-		end
-	else
-		plymeta.SetModel = nil
+		plymeta.SetModel = ForceSetModel
 	end
 end
 cvars.AddChangeCallback( "sv_playermodel_selector_force", ToggleForce )
-ToggleForce()
+
+hook.Add( "Initialize", "lf_playermodel_force_hook2", function( ply )
+	local try = 0
+	ToggleForce()
+	timer.Create( "lf_playermodel_force_timer", 5, 0, function()
+		if plymeta.SetModel == ForceSetModel or not GetConVar( "sv_playermodel_selector_force" ):GetBool() then
+			timer.Remove( "lf_playermodel_force_timer" )
+		else
+			ToggleForce()
+			try = try + 1
+			print( "LF_PMS: Addon conflict detected. Unable to initialize enforcer to protect playermodel. [Attempt: " .. tostring( try ) .. "/10]" )
+			if try >= 10 then
+				timer.Remove( "lf_playermodel_force_timer" )
+			end
+		end
+	end )
+end )
 
 
 end
@@ -1495,21 +1506,21 @@ end
 
 concommand.Add( "playermodel_selector", Menu.Toggle )
 
---[[list.Set( "DesktopWindows", "PlayerEditorLF", {
-	title		= "PM Selector",
-	icon		= "icon64/playermodel.png",
-	init		= function( icon, window )
-		window:Remove()
-		RunConsoleCommand( "playermodel_selector" )
-	end
-} )]]
-
-hook.Add( "Initialize", "lf_playermodel_desktop_hook", function()
+hook.Add( "PostGamemodeLoaded", "lf_playermodel_desktop_hook", function()
 		if GAMEMODE_NAME == "sandbox" then
 			list.GetForEdit( "DesktopWindows" ).PlayerEditor.init = function( icon, window )
 				window:Remove()
 				RunConsoleCommand( "playermodel_selector" )
 			end
+		else
+			list.Set( "DesktopWindows", "PlayerEditor", {
+				title		= "Player Model",
+				icon		= "icon64/playermodel.png",
+				init		= function( icon, window )
+					window:Remove()
+					RunConsoleCommand( "playermodel_selector" )
+				end
+			} )
 		end
 end )
 
