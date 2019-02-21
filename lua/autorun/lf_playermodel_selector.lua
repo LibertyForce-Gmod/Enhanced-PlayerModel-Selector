@@ -324,7 +324,7 @@ end
 if CLIENT then
 
 
-local Version = "3.1"
+local Version = "3.2"
 local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist" }
@@ -412,7 +412,7 @@ function Menu.Setup()
 	Frame = vgui.Create( "DFrame" )
 	local fw, fh = math.min( ScrW() - 16, 960 ), math.min( ScrH() - 16, 700 )
 	Frame:SetSize( fw, fh )
-	Frame:SetTitle( "Enhanced PlayerModel Selector "..Version.." - by LibertyForce" )
+	Frame:SetTitle( "Enhanced PlayerModel Selector "..Version )
 	Frame:SetVisible( true )
 	Frame:SetDraggable( true )
 	Frame:SetScreenLock( false )
@@ -580,10 +580,23 @@ function Menu.Setup()
 				
 				local ModelFilter = Menu.ModelFilter:GetValue() or nil
 				
+				local function IsInFilter( name )
+					if not ModelFilter or ModelFilter == "" then
+						return true
+					else
+						local tbl = string.Split( ModelFilter, " " )
+						for _, substr in pairs( tbl ) do
+							if not string.match( name:lower(), string.PatternSafe( substr:lower() ) ) then
+								return false
+							end
+						end
+						return true
+					end
+				end
+				
 				for name, model in SortedPairs( AllModels ) do
 					
-					if not ModelFilter or ModelFilter == ""
-					or ModelFilter:lower() == string.match( name:lower(), ModelFilter:lower() ) then
+					if IsInFilter( name ) then
 					
 						local icon = ModelIconLayout:Add( "SpawnIcon" )
 						icon:SetSize( 64, 64 )
@@ -863,6 +876,7 @@ function Menu.Setup()
 			c:SizeToContents()
 			c.OnChange = function( p, v )
 				RunConsoleCommand( c.cvar, v == true and "1" or "0" )
+				timer.Simple( 0, function() Menu.RebuildBodygroupTab() end )
 			end
 			
 			local t = panel:Add( "DLabel" )
@@ -1411,6 +1425,9 @@ function Menu.Setup()
 				flextab.Tab:SetVisible( true )
 			end
 		end
+		
+		Menu.Right.tabScroller:InvalidateLayout( true )
+		Menu.Right:InvalidateLayout( true )
 	end
 	
 	function Menu.UpdateFromConvars()
