@@ -31,23 +31,19 @@ util.AddNetworkString("lf_playermodel_update")
 local SetMDL = FindMetaTable("Entity").SetModel
 
 local addon_legs = false
-if file.Exists( "autorun/sh_legs.lua", "LUA" ) then addon_legs = true end
 local addon_vox = false
-if file.Exists( "autorun/tfa_vox_loader.lua", "LUA" ) then addon_vox = true end
 
 local debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() or false
 cvars.AddChangeCallback( "sv_playermodel_selector_debug", function() debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() end )
 
 
-if addon_vox then
-	local function client_sync( ply )
-		net.Start("lf_playermodel_client_sync")
-		net.WriteBool( addon_vox )
-		net.Send( ply )
-	end
-	hook.Add( "PlayerInitialSpawn", "lf_playermodel_client_sync_hook", client_sync )
-	net.Receive("lf_playermodel_client_sync", function( len, ply ) client_sync( ply ) end )
+local function client_sync( ply )
+	net.Start("lf_playermodel_client_sync")
+	net.WriteBool( addon_vox )
+	net.Send( ply )
 end
+hook.Add( "PlayerInitialSpawn", "lf_playermodel_client_sync_hook", client_sync )
+net.Receive("lf_playermodel_client_sync", function( len, ply ) client_sync( ply ) end )
 
 net.Receive("lf_playermodel_cvar_change", function( len, ply )
 	if ply:IsValid() and ply:IsPlayer() then
@@ -105,13 +101,16 @@ net.Receive("lf_playermodel_blacklist", function( len, ply )
 end )
 
 
-if addon_vox then
-	local VOXlist = { }
 
-	function lf_playermodel_selector_get_voxlist() -- global
-		return VOXlist
-	end
+local VOXlist = { }
 
+function lf_playermodel_selector_get_voxlist() -- global
+	return VOXlist
+end
+
+local function InitVOX()
+	addon_vox = true
+	
 	if file.Exists( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) then
 		local loaded = util.JSONToTable( file.Read( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) )
 		if istable( loaded ) then
@@ -121,47 +120,48 @@ if addon_vox then
 			loaded = nil
 		end
 	end
+end
 
-	net.Receive("lf_playermodel_voxlist", function( len, ply )
-		if ply:IsValid() and ply:IsPlayer() and ply:IsAdmin() then
-			local function tfa_reload()
-				TFAVOX_Packs_Initialize()
-				TFAVOX_PrecachePacks()
-				for k,v in pairs( player.GetAll() ) do
-					print("Resetting the VOX of " .. v:Nick() )
-					if IsValid(v) then TFAVOX_Init(v,true,true) end
-				end
+net.Receive("lf_playermodel_voxlist", function( len, ply )
+	if addon_vox and ply:IsValid() and ply:IsPlayer() and ply:IsAdmin() then
+		local function tfa_reload()
+			TFAVOX_Packs_Initialize()
+			TFAVOX_PrecachePacks()
+			for k,v in pairs( player.GetAll() ) do
+				print("Resetting the VOX of " .. v:Nick() )
+				if IsValid(v) then TFAVOX_Init(v,true,true) end
 			end
-			local mode = net.ReadInt( 3 )
-			if mode == 1 then
-				local k = net.ReadString()
-				local v = net.ReadString()
-				VOXlist[k] = v
+		end
+		local mode = net.ReadInt( 3 )
+		if mode == 1 then
+			local k = net.ReadString()
+			local v = net.ReadString()
+			VOXlist[k] = v
+			file.Write( "lf_playermodel_selector/sv_voxlist.txt", util.TableToJSON( VOXlist, true ) )
+			--TFAVOX_Models = { }
+			tfa_reload()
+		elseif mode == 2 then
+			local tbl = net.ReadTable()
+			if istable( tbl ) then
+				for k, v in pairs( tbl ) do
+					local name = tostring( v )
+					VOXlist[name] = nil
+					if istable( TFAVOX_Models ) then TFAVOX_Models[name] = nil end
+				end
 				file.Write( "lf_playermodel_selector/sv_voxlist.txt", util.TableToJSON( VOXlist, true ) )
 				--TFAVOX_Models = { }
 				tfa_reload()
-			elseif mode == 2 then
-				local tbl = net.ReadTable()
-				if istable( tbl ) then
-					for k, v in pairs( tbl ) do
-						local name = tostring( v )
-						VOXlist[name] = nil
-						if istable( TFAVOX_Models ) then TFAVOX_Models[name] = nil end
-					end
-					file.Write( "lf_playermodel_selector/sv_voxlist.txt", util.TableToJSON( VOXlist, true ) )
-					--TFAVOX_Models = { }
-					tfa_reload()
-				end
 			end
-			net.Start("lf_playermodel_voxlist")
-			net.WriteTable( VOXlist )
-			net.Send( ply )
 		end
-	end )
-end
+		net.Start("lf_playermodel_voxlist")
+		net.WriteTable( VOXlist )
+		net.Send( ply )
+	end
+end )
 
 
 local plymeta = FindMetaTable( "Player" )
+local CurrentPlySetModel
 
 local function Allowed( ply )
 	if GAMEMODE_NAME == "sandbox" or ( !Blacklist[GAMEMODE_NAME] and ( ply:IsAdmin() or GetConVar( "sv_playermodel_selector_gamemodes"):GetBool() ) ) then
@@ -286,22 +286,36 @@ local function ForceSetModel( ply, mdl )
 		else
 			if debugmode then print( "LF_PMS: Enforcer prevented "..tostring( ply:GetName() ).."'s model from being changed to: "..tostring( mdl ) ) end
 		end
-	else
-		SetMDL( ply, mdl )
+	elseif mdl then
+		CurrentPlySetModel( ply, mdl )
 		if addon_legs then hook.Run( "SetModel" , ply, mdl ) end
 	end
 end
 
 local function ToggleForce()
+	if plymeta.SetModel and plymeta.SetModel ~= ForceSetModel then
+		CurrentPlySetModel = plymeta.SetModel
+	else
+		CurrentPlySetModel = SetMDL
+	end
+	
 	if GetConVar( "sv_playermodel_selector_force" ):GetBool() then
 		plymeta.SetModel = ForceSetModel
+	else
+		plymeta.SetModel = CurrentPlySetModel
 	end
 end
 cvars.AddChangeCallback( "sv_playermodel_selector_force", ToggleForce )
 
 hook.Add( "Initialize", "lf_playermodel_force_hook2", function( ply )
+	if file.Exists( "autorun/sh_legs.lua", "LUA" ) then addon_legs = true end
+	--if file.Exists( "autorun/tfa_vox_loader.lua", "LUA" ) then addon_vox = true end
+	if TFAVOX_Models then InitVOX() end
+	
 	local try = 0
+	
 	ToggleForce()
+	
 	timer.Create( "lf_playermodel_force_timer", 5, 0, function()
 		if plymeta.SetModel == ForceSetModel or not GetConVar( "sv_playermodel_selector_force" ):GetBool() then
 			timer.Remove( "lf_playermodel_force_timer" )
@@ -324,7 +338,7 @@ end
 if CLIENT then
 
 
-local Version = "3.2"
+local Version = "3.3"
 local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist" }
