@@ -15,6 +15,7 @@ convars["sv_playermodel_selector_debug"]		= 0
 for cvar, def in pairs( convars ) do
 	CreateConVar( cvar,	def, flag )
 end
+flag = nil
 
 
 if SERVER then
@@ -22,7 +23,7 @@ if SERVER then
 
 AddCSLuaFile()
 
-util.AddNetworkString("lf_playermodel_client_sync")
+--util.AddNetworkString("lf_playermodel_client_sync")
 util.AddNetworkString("lf_playermodel_cvar_change")
 util.AddNetworkString("lf_playermodel_blacklist")
 util.AddNetworkString("lf_playermodel_voxlist")
@@ -31,19 +32,18 @@ util.AddNetworkString("lf_playermodel_update")
 local SetMDL = FindMetaTable("Entity").SetModel
 
 local addon_legs = false
-local addon_vox = false
 
 local debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() or false
 cvars.AddChangeCallback( "sv_playermodel_selector_debug", function() debugmode = GetConVar( "sv_playermodel_selector_debug" ):GetBool() end )
 
 
-local function client_sync( ply )
-	net.Start("lf_playermodel_client_sync")
-	net.WriteBool( addon_vox )
-	net.Send( ply )
-end
-hook.Add( "PlayerInitialSpawn", "lf_playermodel_client_sync_hook", client_sync )
-net.Receive("lf_playermodel_client_sync", function( len, ply ) client_sync( ply ) end )
+--local function client_sync( ply )
+--	net.Start("lf_playermodel_client_sync")
+--	net.WriteBool( addon_vox )
+--	net.Send( ply )
+--end
+--hook.Add( "PlayerInitialSpawn", "lf_playermodel_client_sync_hook", client_sync )
+--net.Receive("lf_playermodel_client_sync", function( len, ply ) client_sync( ply ) end )
 
 net.Receive("lf_playermodel_cvar_change", function( len, ply )
 	if ply:IsValid() and ply:IsPlayer() then
@@ -109,8 +109,6 @@ function lf_playermodel_selector_get_voxlist() -- global
 end
 
 local function InitVOX()
-	addon_vox = true
-	
 	if file.Exists( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) then
 		local loaded = util.JSONToTable( file.Read( "lf_playermodel_selector/sv_voxlist.txt", "DATA" ) )
 		if istable( loaded ) then
@@ -123,7 +121,7 @@ local function InitVOX()
 end
 
 net.Receive("lf_playermodel_voxlist", function( len, ply )
-	if addon_vox and ply:IsValid() and ply:IsPlayer() and ply:IsAdmin() then
+	if TFAVOX_Models and ply:IsValid() and ply:IsPlayer() and ply:IsAdmin() then
 		local function tfa_reload()
 			TFAVOX_Packs_Initialize()
 			TFAVOX_PrecachePacks()
@@ -343,7 +341,7 @@ local Menu = { }
 local Frame
 local default_animations = { "idle_all_01", "menu_walk", "pose_standing_02", "pose_standing_03", "idle_fist" }
 local Favorites = { }
-local addon_vox = false
+--local addon_vox = false
 
 if !file.Exists( "lf_playermodel_selector", "DATA" ) then file.CreateDir( "lf_playermodel_selector" ) end
 if file.Exists( "playermodel_selector_favorites.txt", "DATA" ) then -- Migrate from old version
@@ -370,11 +368,11 @@ CreateClientConVar( "cl_playermodel_selector_unlockflexes", "0", false, true )
 CreateClientConVar( "cl_playermodel_selector_bgcolor_custom", "1", true, true )
 CreateClientConVar( "cl_playermodel_selector_bgcolor_trans", "1", true, true )
 
-net.Start("lf_playermodel_client_sync")
-net.SendToServer()
-net.Receive("lf_playermodel_client_sync", function()
-	addon_vox = net.ReadBool()
-end )
+--net.Start("lf_playermodel_client_sync")
+--net.SendToServer()
+--net.Receive("lf_playermodel_client_sync", function()
+--	addon_vox = net.ReadBool()
+--end )
 
 hook.Add( "PostGamemodeLoaded", "lf_playermodel_sboxcvars", function()
 	if !ConVarExists( "cl_playercolor" ) then CreateConVar( "cl_playercolor", "0.24 0.34 0.41", { FCVAR_ARCHIVE, FCVAR_USERINFO, FCVAR_DONTRECORD }, "The value is a Vector - so between 0-1 - not between 0-255" ) end
@@ -1046,8 +1044,8 @@ function Menu.Setup()
 					Blacklist:Clear()
 					for k, v in pairs( tbl ) do
 						Blacklist:AddLine( k )
-						Blacklist:SortByColumn( 1 )
 					end
+					Blacklist:SortByColumn( 1 )
 				end )
 				
 				function Menu.BlacklistPopulate()
@@ -1116,7 +1114,7 @@ function Menu.Setup()
 				end
 				
 				
-				if addon_vox then
+				if TFAVOX_Models then
 					
 					local panel = moretab:Add( "DPanel" )
 					moretab:AddSheet( "VOX", panel, "icon16/sound.png" )
@@ -1135,8 +1133,8 @@ function Menu.Setup()
 						VOXlist:Clear()
 						for k, v in pairs( tbl ) do
 							VOXlist:AddLine( string.StripExtension( string.gsub( k, "models/", "", 1 ) ), string.StripExtension( string.gsub( v, "models/", "", 1 ) ) )
-							VOXlist:SortByColumn( 1 )
 						end
+						VOXlist:SortByColumn( 1 )
 					end )
 					
 					function Menu.VOXlistPopulate()
@@ -1162,8 +1160,8 @@ function Menu.Setup()
 					if istable( TFAVOX_Models ) then
 						for k, v in pairs( TFAVOX_Models ) do
 							VOXinstalled:AddLine( string.StripExtension( string.gsub( k, "models/", "", 1 ) ) )
-							VOXinstalled:SortByColumn( 1 )
 						end
+						VOXinstalled:SortByColumn( 1 )
 					end
 					
 					local b = control:Add( "DButton" )
