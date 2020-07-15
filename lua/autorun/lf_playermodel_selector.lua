@@ -277,7 +277,7 @@ hook.Add( "PlayerSpawn", "lf_playermodel_force_hook1", function( ply )
 end )
 
 local function ForceSetModel( ply, mdl )
-	if GetConVar( "sv_playermodel_selector_force" ):GetBool() and Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
+	if not GAMEMODE.lf_pms_DisableEnforcer and GetConVar( "sv_playermodel_selector_force" ):GetBool() and Allowed( ply ) and tobool( ply:GetInfoNum( "cl_playermodel_selector_force", 0 ) ) then
 		if !ply.lf_playermodel_spawned then
 			if debugmode then print( "LF_PMS: Detected initial call for SetModel on: "..tostring( ply:GetName() ) ) end
 			UpdatePlayerModel( ply )
@@ -297,7 +297,7 @@ local function ToggleForce()
 		CurrentPlySetModel = SetMDL
 	end
 	
-	if GetConVar( "sv_playermodel_selector_force" ):GetBool() then
+	if not GAMEMODE.lf_pms_DisableEnforcer and GetConVar( "sv_playermodel_selector_force" ):GetBool() then
 		plymeta.SetModel = ForceSetModel
 	else
 		plymeta.SetModel = CurrentPlySetModel
@@ -310,22 +310,24 @@ hook.Add( "Initialize", "lf_playermodel_force_hook2", function( ply )
 	--if file.Exists( "autorun/tfa_vox_loader.lua", "LUA" ) then addon_vox = true end
 	if TFAVOX_Models then InitVOX() end
 	
-	local try = 0
-	
-	ToggleForce()
-	
-	timer.Create( "lf_playermodel_force_timer", 5, 0, function()
-		if plymeta.SetModel == ForceSetModel or not GetConVar( "sv_playermodel_selector_force" ):GetBool() then
-			timer.Remove( "lf_playermodel_force_timer" )
-		else
-			ToggleForce()
-			try = try + 1
-			print( "LF_PMS: Addon conflict detected. Unable to initialize enforcer to protect playermodel. [Attempt: " .. tostring( try ) .. "/10]" )
-			if try >= 10 then
+	if not GAMEMODE.lf_pms_DisableEnforcer then
+		local try = 0
+		
+		ToggleForce()
+		
+		timer.Create( "lf_playermodel_force_timer", 5, 0, function()
+			if plymeta.SetModel == ForceSetModel or not GetConVar( "sv_playermodel_selector_force" ):GetBool() then
 				timer.Remove( "lf_playermodel_force_timer" )
+			else
+				ToggleForce()
+				try = try + 1
+				print( "LF_PMS: Addon conflict detected. Unable to initialize enforcer to protect playermodel. [Attempt: " .. tostring( try ) .. "/10]" )
+				if try >= 10 then
+					timer.Remove( "lf_playermodel_force_timer" )
+				end
 			end
-		end
-	end )
+		end )
+	end
 end )
 
 
